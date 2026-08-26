@@ -9,8 +9,11 @@
   },
   "license": "MIT",
   "keywords": ["orchestration", "workflow", "plugin-coordination", "caching", "context-optimization"],
-  "dependencies": ["agent-isdd", "agent-tdd", "code-reviewer", "agent-nelly"],
   "optionalDependencies": {
+    "agent-isdd": "Coordinated via INTEROP.md handoff contracts.",
+    "agent-tdd": "Coordinated via INTEROP.md handoff contracts.",
+    "code-reviewer": "Coordinated via INTEROP.md handoff contracts.",
+    "agent-nelly": "Coordinated via INTEROP.md handoff contracts.",
     "agent-ux": "*",
     "agent-cache-plugin": "*"
   }
