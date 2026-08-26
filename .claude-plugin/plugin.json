@@ -1,0 +1,27 @@
+{
+  "name": "plugin-orchestrator",
+  "version": "1.0.0",
+  "displayName": "Plugin Orchestrator",
+  "description": "Caching-first multi-plugin workflow router that coordinates plugin capabilities via INTEROP.md contracts, distributes nelly brief once, and maximizes prompt cache efficiency via three-tier context layout.",
+  "repository": "https://github.com/renfordn/plugin-orchestrator",
+  "author": "renfordn",
+  "license": "MIT",
+  "keywords": ["orchestration", "workflow", "plugin-coordination", "caching", "context-optimization"],
+  "entryPoints": {
+    "hooks": {
+      "before_continue": "hooks/before_continue.py:handle_agent_spawn",
+      "subagent_stop": "hooks/subagent_stop.py:handle_agent_completion"
+    }
+  },
+  "skills": [],
+  "dependencies": {
+    "agent-isdd": ">=0.1.0",
+    "agent-tdd": ">=0.1.0",
+    "code-reviewer": ">=0.1.0",
+    "agent-nelly": ">=0.1.0"
+  },
+  "softDependencies": [
+    "agent-ux",
+    "agent-cache-plugin"
+  ]
+}
