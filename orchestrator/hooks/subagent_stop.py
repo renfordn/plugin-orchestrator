@@ -29,7 +29,7 @@ def handle_agent_completion(
     agent_type: str,
     report: str,
     workflow_state: dict
-) -> None:
+) -> Dict:
     """
     Capture agent completion, validate output, and log handoff.
 
@@ -40,6 +40,17 @@ def handle_agent_completion(
         agent_type: Name of completed agent (e.g., "agent-tdd")
         report: Agent output report
         workflow_state: Current workflow state dict (modified in-place)
+
+    Returns:
+        Summary dict the calling hook entrypoint can use to surface a
+        systemMessage to the user:
+        {
+            "success": bool,
+            "validation_result": "contract_valid" | "contract_invalid",
+            "error_details": {...},
+            "escalation_marker": str | None,
+            "recovery_action": str | None  # set only when contract_invalid
+        }
     """
     # Ensure orchestration structure exists
     _ensure_orchestration_structure(workflow_state)
@@ -72,12 +83,21 @@ def handle_agent_completion(
     )
 
     # Trigger error handler on contract mismatch
+    recovery_action = None
     if validation_result == "contract_invalid":
-        _trigger_error_handler(
+        recovery_action = _trigger_error_handler(
             workflow_state,
             agent_type,
             error_details
         )
+
+    return {
+        "success": success,
+        "validation_result": validation_result,
+        "error_details": error_details,
+        "escalation_marker": escalation_marker,
+        "recovery_action": recovery_action,
+    }
 
 
 def _ensure_orchestration_structure(workflow_state: dict) -> None:
@@ -347,7 +367,7 @@ def _trigger_error_handler(
     workflow_state: dict,
     agent_type: str,
     error_details: Dict
-) -> None:
+) -> Optional[str]:
     """Trigger error handler on contract violation.
 
     Instantiates ErrorHandler to classify and handle the contract mismatch error.
@@ -360,6 +380,10 @@ def _trigger_error_handler(
         workflow_state: Workflow state dict (may be modified by error handler)
         agent_type: Agent that violated contract
         error_details: Dict with validation failure details (reason, missing_fields, etc.)
+
+    Returns:
+        The recovery action taken (e.g. "rollback", "pause"), or None if the
+        error handler itself failed.
     """
     try:
         # Instantiate error handler with dependencies
@@ -382,18 +406,22 @@ def _trigger_error_handler(
             f"error_type={error_type}, recovery_action={recovery_action}"
         )
 
+        return recovery_action
+
     except (IOError, OSError) as e:
         # File I/O error (e.g., checkpoint file not accessible)
         logger.error(
             f"Error handler file I/O error: {e.__class__.__name__}: {e}. "
             "Proceeding without recovery."
         )
+        return None
     except Exception as e:
         # Any other error in error handler (parsing, instantiation, etc.)
         logger.error(
             f"Error handler failed: {e.__class__.__name__}: {e}. "
             "Proceeding without error recovery."
         )
+        return None
 
 
 def _get_iso_timestamp() -> str:

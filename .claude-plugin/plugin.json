@@ -1,6 +1,6 @@
 {
   "name": "plugin-orchestrator",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "displayName": "Plugin Orchestrator",
   "description": "Caching-first multi-plugin workflow router that coordinates plugin capabilities via INTEROP.md contracts, distributes nelly brief once, and maximizes prompt cache efficiency via three-tier context layout.",
   "homepage": "https://github.com/renfordn/plugin-orchestrator",

@@ -93,12 +93,43 @@ def main():
 
     try:
         from orchestrator.hooks.subagent_stop import handle_agent_completion
-        handle_agent_completion(agent_type, report, workflow_state)
+        summary = handle_agent_completion(agent_type, report, workflow_state)
     except Exception:
         sys.exit(0)  # graceful degradation — never block subagent completion
 
     save_workflow_state(state_path, workflow_state)
+
+    system_message = _build_system_message(agent_type, summary)
+    if system_message:
+        print(json.dumps({"systemMessage": system_message}))
+
     sys.exit(0)
+
+
+def _build_system_message(agent_type, summary):
+    """Surface a contract violation or escalation to the user's transcript.
+
+    SubagentStop cannot inject context back into the conversation, but it can
+    show the user a systemMessage (see module docstring). Without this, a
+    "pause" recovery decision or a detected escalation marker was previously
+    only ever written to workflow-state.json's handoff_history, invisible
+    unless someone went looking at the file.
+    """
+    if not summary:
+        return None
+
+    parts = []
+    if summary.get("escalation_marker"):
+        parts.append(f"{agent_type} raised an escalation marker: {summary['escalation_marker']}")
+    if summary.get("validation_result") == "contract_invalid":
+        missing = summary.get("error_details", {}).get("missing_fields")
+        detail = f" (missing: {', '.join(missing)})" if missing else ""
+        action = summary.get("recovery_action") or "no recovery available"
+        parts.append(
+            f"{agent_type}'s output failed contract validation{detail} — "
+            f"orchestrator recovery action: {action}"
+        )
+    return " | ".join(parts) if parts else None
 
 
 if __name__ == "__main__":

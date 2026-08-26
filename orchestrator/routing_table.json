@@ -1,0 +1,8 @@
+{
+  "_comment": "Deterministic workflow routing: (current_plugin, current_phase) -> next_plugin. Edit this to add or change routes without touching orchestrator/core.py. Each entry's next_plugin should also appear in the source plugin's INTEROP.md as a '## → <plugin>' handoff target; PluginRouter logs a warning (does not fail) if it doesn't, since INTEROP.md handoff sections don't always map 1:1 to phase-specific routes.",
+  "routes": [
+    {"plugin": "agent-isdd", "phase": "design_approved", "next": "agent-tdd"},
+    {"plugin": "agent-tdd", "phase": "red_green_refactor_complete", "next": "code-reviewer"},
+    {"plugin": "code-reviewer", "phase": "review_complete", "next": null}
+  ]
+}

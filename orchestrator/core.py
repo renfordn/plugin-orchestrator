@@ -17,8 +17,13 @@ Example workflow sequence:
 If any handoff fails validation, the workflow pauses (returns None).
 """
 
+import json
+import warnings
+from pathlib import Path
 from typing import Optional, Tuple
 from orchestrator.interop_parser import CapabilityMap
+
+DEFAULT_ROUTING_TABLE_PATH = Path(__file__).parent / "routing_table.json"
 
 
 class PluginRouter:
@@ -29,7 +34,9 @@ class PluginRouter:
             Unavailability blocks the workflow.
         SOFT_DEPENDENCIES: Set of optional plugins. Unavailability logs a warning
             but does not block the workflow.
-        ROUTING_TABLE: Deterministic routing by (plugin, phase) tuple.
+        ROUTING_TABLE: Deterministic routing by (plugin, phase) tuple, loaded from
+            routing_table.json (see routing_table_path on __init__) rather than
+            hardcoded, so new workflow sequences don't require editing this module.
     """
 
     # Hard dependencies: required for workflow continuation
@@ -38,19 +45,19 @@ class PluginRouter:
     # Soft dependencies: optional (log if unavailable, continue)
     SOFT_DEPENDENCIES = {"agent-nelly", "agent-ux", "agent-cache-plugin"}
 
-    # Workflow routing table: (current_plugin, current_phase) -> next_plugin
-    ROUTING_TABLE = {
-        ("agent-isdd", "design_approved"): "agent-tdd",
-        ("agent-tdd", "red_green_refactor_complete"): "code-reviewer",
-        ("code-reviewer", "review_complete"): None,
-    }
-
-    def __init__(self, capability_map: CapabilityMap):
+    def __init__(
+        self,
+        capability_map: CapabilityMap,
+        routing_table_path: Optional[str] = None
+    ):
         """Initialize PluginRouter with CapabilityMap for contract queries.
 
         Args:
             capability_map: CapabilityMap instance providing plugin metadata
                 and capability contracts (consumes/produces shapes).
+            routing_table_path: Optional path to a routing table JSON file
+                (see orchestrator/routing_table.json for the schema). Defaults
+                to the bundled routing_table.json next to this module.
 
         Raises:
             TypeError: If capability_map is None or not a CapabilityMap instance.
@@ -58,6 +65,40 @@ class PluginRouter:
         if capability_map is None:
             raise TypeError("capability_map cannot be None")
         self.capability_map = capability_map
+        self.ROUTING_TABLE = self._load_routing_table(
+            routing_table_path or DEFAULT_ROUTING_TABLE_PATH
+        )
+
+    def _load_routing_table(self, path) -> dict:
+        """Load (plugin, phase) -> next_plugin routes from a JSON config file.
+
+        Cross-checks each route's next_plugin against the source plugin's
+        INTEROP.md-derived handoff_targets and warns (does not fail) on a
+        mismatch, since phase-specific routes don't always show up as a
+        distinct '## → <plugin>' section.
+        """
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            warnings.warn(f"Failed to load routing table from {path}: {e}")
+            return {}
+
+        table = {}
+        for route in data.get("routes", []):
+            plugin, phase, next_plugin = route["plugin"], route["phase"], route["next"]
+            table[(plugin, phase)] = next_plugin
+
+            if next_plugin is not None:
+                source = self.capability_map.get_plugin(plugin)
+                if source and source.handoff_targets and next_plugin not in source.handoff_targets:
+                    warnings.warn(
+                        f"routing_table.json route ({plugin}, {phase}) -> {next_plugin} "
+                        f"not found in {plugin}'s INTEROP.md handoff targets "
+                        f"{source.handoff_targets}"
+                    )
+
+        return table
 
     def check_plugin_availability(
         self,

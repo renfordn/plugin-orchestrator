@@ -63,11 +63,43 @@ def handle_agent_spawn(
     checkpoint_manager.create_checkpoint(workflow_state, checkpoint_label)
 
     # Step 5: Build tiered context and inject into prompt
+    rollback_context = _build_rollback_context(workflow_state)
     tier1_context = _build_tier1_context(capability_map, brief_text)
     tier2_context = _build_tier2_context(workflow_state)
-    modified_prompt = f"{tier1_context}\n\n{tier2_context}\n\n{spawn_prompt}"
+    parts = [p for p in (rollback_context, tier1_context, tier2_context, spawn_prompt) if p]
+    modified_prompt = "\n\n".join(parts)
 
     return modified_prompt
+
+
+def _build_rollback_context(workflow_state: dict) -> Optional[str]:
+    """Surface a pending rollback/escalation to the next spawned agent.
+
+    subagent_stop.py's handle_agent_completion sets workflow_state["rollback_pending"]
+    when a prior agent's report contained an escalation marker (research gap, plan
+    conflict) — previously this was only ever written to workflow-state.json and
+    never actually reached an agent or the user. Consumes (clears) the marker once
+    surfaced so it doesn't repeat on every subsequent spawn.
+
+    Args:
+        workflow_state: Workflow state dict (modified in-place: clears rollback_pending)
+
+    Returns:
+        Formatted warning block, or None if no rollback is pending.
+    """
+    rollback_marker = workflow_state.pop("rollback_pending", None)
+    if not rollback_marker:
+        return None
+
+    logger.warning(f"Surfacing pending escalation to next agent spawn: {rollback_marker}")
+
+    return (
+        "=== ORCHESTRATOR ALERT: UNRESOLVED ESCALATION FROM PRIOR AGENT ===\n"
+        f"Escalation type: {rollback_marker.get('escalation_type', 'unknown_escalation')}\n"
+        f"Marker: {rollback_marker.get('marker_found', '')}\n"
+        f"Detected: {rollback_marker.get('timestamp', '')}\n"
+        f"{rollback_marker.get('action_required', 'Review before continuing.')}"
+    )
 
 
 def _ensure_orchestration_structure(workflow_state: dict) -> None:
