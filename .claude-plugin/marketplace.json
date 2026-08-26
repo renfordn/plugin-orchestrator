@@ -1,0 +1,10 @@
+{
+  "name": "plugin-orchestrator-marketplace",
+  "description": "Jay Nelson's marketplace for the plugin-orchestrator. Caching-first multi-plugin workflow router for Claude Code.",
+  "owner": {
+    "name": "Jay Nelson"
+  },
+  "plugins": [
+    { "name": "plugin-orchestrator", "source": "./" }
+  ]
+}
