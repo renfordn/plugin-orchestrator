@@ -13,9 +13,7 @@ class TestCapabilityMapParsing(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.plugin_dir = Path(
-            "/Users/jay.nelson/Codebase/AI/plugins/claude"
-        )
+        self.plugin_dir = Path(__file__).parent / "fixtures"
         self.temp_workflow_state = tempfile.NamedTemporaryFile(
             mode='w', suffix='.json', delete=False
         )
@@ -223,9 +221,7 @@ class TestCapabilityMapRefactoring(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.plugin_dir = Path(
-            "/Users/jay.nelson/Codebase/AI/plugins/claude"
-        )
+        self.plugin_dir = Path(__file__).parent / "fixtures"
         self.temp_workflow_state = tempfile.NamedTemporaryFile(
             mode='w', suffix='.json', delete=False
         )

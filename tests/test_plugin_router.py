@@ -10,7 +10,8 @@ class TestPluginRouterInitialization(unittest.TestCase):
 
     def test_init_with_valid_capability_map(self):
         """Test PluginRouter initializes with valid CapabilityMap."""
-        plugin_dir = "/Users/jay.nelson/Codebase/AI/plugins/claude"
+        from pathlib import Path
+        plugin_dir = str(Path(__file__).parent / "fixtures")
         capability_map = CapabilityMap(plugin_dir)
         router = PluginRouter(capability_map)
 
@@ -29,7 +30,8 @@ class TestPluginRouterAvailabilityChecks(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.plugin_dir = "/Users/jay.nelson/Codebase/AI/plugins/claude"
+        from pathlib import Path
+        self.plugin_dir = str(Path(__file__).parent / "fixtures")
         self.capability_map = CapabilityMap(self.plugin_dir)
         self.router = PluginRouter(self.capability_map)
 
@@ -140,7 +142,8 @@ class TestPluginRouterHandoffValidation(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.plugin_dir = "/Users/jay.nelson/Codebase/AI/plugins/claude"
+        from pathlib import Path
+        self.plugin_dir = str(Path(__file__).parent / "fixtures")
         self.capability_map = CapabilityMap(self.plugin_dir)
         self.router = PluginRouter(self.capability_map)
 

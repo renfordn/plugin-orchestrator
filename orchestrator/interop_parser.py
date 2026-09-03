@@ -39,13 +39,18 @@ class CapabilityMap:
         "agent-cache-plugin": "agent-cache-plugin/STRUCTURE.md",
     }
 
-    def __init__(self, plugin_dir_base: str = "/Users/jay.nelson/Codebase/AI/plugins/claude"):
+    def __init__(self, plugin_dir_base: Optional[str] = None):
         """
         Parse INTEROP.md files and build capability registry.
 
         Args:
-            plugin_dir_base: Base directory containing all plugin folders
+            plugin_dir_base: Base directory containing all plugin folders.
+                            Defaults to environment variable CLAUDE_PLUGINS_DIR if set,
+                            otherwise creates empty registry.
         """
+        if plugin_dir_base is None:
+            plugin_dir_base = Path(__file__).parent.parent / "tests" / "fixtures"
+
         self.plugin_dir_base = Path(plugin_dir_base)
         self.plugins: Dict[str, PluginInfo] = {}
         self.interop_hashes: Dict[str, str] = {}
