@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,7 +53,11 @@ class CapabilityMap:
                             otherwise creates empty registry.
         """
         if plugin_dir_base is None:
-            plugin_dir_base = Path(__file__).parent.parent / "tests" / "fixtures"
+            env_dir = os.environ.get("CLAUDE_PLUGINS_DIR")
+            if env_dir:
+                plugin_dir_base = Path(os.path.expanduser(os.path.expandvars(env_dir)))
+            else:
+                plugin_dir_base = Path(__file__).parent.parent / "tests" / "fixtures"
 
         self.plugin_dir_base = Path(plugin_dir_base)
         self.plugins: Dict[str, PluginInfo] = {}
@@ -354,12 +359,19 @@ class CapabilityMap:
         return False
 
     @staticmethod
-    def get_cached_map(workflow_state_path: str) -> Optional['CapabilityMap']:
+    def get_cached_map(
+        workflow_state_path: str,
+        plugin_dir_base: Optional[str] = None
+    ) -> Optional['CapabilityMap']:
         """
         Fetch cached map from workflow-state.json if INTEROP hashes unchanged.
 
         Args:
             workflow_state_path: Path to workflow-state.json file
+            plugin_dir_base: Base directory the cached map was built from. Must
+                match the directory passed to the original CapabilityMap(), or
+                hash comparison will always report a change. Defaults the same
+                way CapabilityMap.__init__ does (CLAUDE_PLUGINS_DIR, else fixtures).
 
         Returns:
             CapabilityMap or None if cache invalid or not found
@@ -378,7 +390,7 @@ class CapabilityMap:
             return None
 
         # Create new map to check if hashes still match
-        current_map = CapabilityMap()
+        current_map = CapabilityMap(plugin_dir_base)
         cached_hashes = state.get("interop_hashes", {})
 
         # If hashes unchanged, use cached data

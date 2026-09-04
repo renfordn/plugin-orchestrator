@@ -15,6 +15,76 @@ fi
 PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
 echo "✓ Python $PYTHON_VERSION available"
 
+# Clone and install plugin dependencies
+echo "📦 Setting up plugins..."
+
+PLUGINS_DIR="$HOME/.claude/plugins"
+mkdir -p "$PLUGINS_DIR"
+
+# Define plugins (hard + soft dependencies)
+declare -A PLUGINS=(
+  ["agent-isdd"]="https://github.com/renfordn/agent-isdd"
+  ["agent-tdd"]="https://github.com/renfordn/agent-tdd"
+  ["code-reviewer"]="https://github.com/renfordn/code-reviewer"
+  ["agent-nelly"]="https://github.com/renfordn/agent-nelly"
+  ["agent-ux"]="https://github.com/renfordn/agent-ux"
+)
+
+# Hard dependencies that must succeed
+HARD_DEPS=("agent-isdd" "agent-tdd" "code-reviewer")
+
+FAILED_PLUGINS=()
+
+# Clone/pull and install dependencies for each plugin
+for plugin_name in "${!PLUGINS[@]}"; do
+  repo_url="${PLUGINS[$plugin_name]}"
+  plugin_path="$PLUGINS_DIR/$plugin_name"
+
+  is_hard=false
+  for hard_dep in "${HARD_DEPS[@]}"; do
+    if [[ "$plugin_name" == "$hard_dep" ]]; then
+      is_hard=true
+      break
+    fi
+  done
+
+  # Clone or update plugin
+  if [ -d "$plugin_path" ]; then
+    echo "  ↻ Updating $plugin_name..."
+    if ! (cd "$plugin_path" && git pull origin main --quiet 2>/dev/null); then
+      echo "  ⚠️  Failed to update $plugin_name"
+      if $is_hard; then FAILED_PLUGINS+=("$plugin_name"); fi
+    fi
+  else
+    echo "  ⬇️  Cloning $plugin_name..."
+    if ! git clone "$repo_url" "$plugin_path" --quiet 2>/dev/null; then
+      echo "  ❌ Failed to clone $plugin_name"
+      if $is_hard; then FAILED_PLUGINS+=("$plugin_name"); fi
+      continue
+    fi
+  fi
+
+  # Install Python dependencies if requirements.txt exists
+  if [ -f "$plugin_path/requirements.txt" ]; then
+    echo "  🔧 Installing dependencies for $plugin_name..."
+    if ! python3 -m pip install -r "$plugin_path/requirements.txt" --quiet 2>/dev/null; then
+      echo "  ⚠️  Failed to install dependencies for $plugin_name"
+      if $is_hard; then FAILED_PLUGINS+=("$plugin_name"); fi
+    fi
+  fi
+
+  echo "  ✓ $plugin_name ready"
+done
+
+# Check if hard dependencies failed
+if [ ${#FAILED_PLUGINS[@]} -gt 0 ]; then
+  echo "❌ Failed to set up hard dependencies: ${FAILED_PLUGINS[*]}"
+  exit 1
+fi
+
+echo "✅ All plugins installed"
+echo ""
+
 # Run test suite to verify environment
 echo "🧪 Running test suite..."
 if python3 -m unittest discover -s tests -q 2>/dev/null; then

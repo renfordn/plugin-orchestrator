@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_PLUGINS_DIR": "$HOME/.claude/plugins"
+  },
   "hooks": {
     "SessionStart": [
       {

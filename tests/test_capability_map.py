@@ -166,7 +166,7 @@ class TestCapabilityMapParsing(unittest.TestCase):
         cap_map1.save_to_cache(self.temp_workflow_state.name)
 
         # Retrieve cached map
-        cap_map2 = CapabilityMap.get_cached_map(self.temp_workflow_state.name)
+        cap_map2 = CapabilityMap.get_cached_map(self.temp_workflow_state.name, str(self.plugin_dir))
 
         self.assertIsNotNone(cap_map2)
 
@@ -240,7 +240,7 @@ class TestCapabilityMapRefactoring(unittest.TestCase):
         cap_map1.save_to_cache(self.temp_workflow_state.name)
 
         # Load from cache
-        cap_map2 = CapabilityMap.get_cached_map(self.temp_workflow_state.name)
+        cap_map2 = CapabilityMap.get_cached_map(self.temp_workflow_state.name, str(self.plugin_dir))
 
         # Verify all plugins are preserved
         for plugin_name in ["agent-isdd", "agent-tdd", "agent-nelly", "agent-ux"]:
