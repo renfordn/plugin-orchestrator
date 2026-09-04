@@ -216,21 +216,28 @@ Workflow continues if soft dependencies are unavailable—graceful degradation.
 All 5 plugins live together in one repo, `renfordn/claude-plugins` (one subdirectory per
 plugin: `agent-isdd/`, `agent-tdd/`, `code-reviewer/`, `agent-nelly/`, `agent-ux/`), migrated
 there from 5 separate repos specifically to make cloud bootstrap cheaper — see that repo's
-README for why. It is **not** reachable in a fresh cloud session by default. The
-`.claude/hooks/session-start.sh` hook clones it into `~/.claude/plugins/claude-plugins`, and
-`CLAUDE_PLUGINS_DIR` (set in `.claude/settings.json`) points `CapabilityMap()` at that directory
-— but the hook's plain `git clone` only succeeds for a repo already attached to *this session's*
-GitHub scope. A bash hook cannot call `add_repo` itself.
+README for why. The `.claude/hooks/session-start.sh` hook clones it into
+`~/.claude/plugins/claude-plugins`, and `CLAUDE_PLUGINS_DIR` (set in `.claude/settings.json`)
+points `CapabilityMap()` at that directory.
 
-**So at the start of any new cloud session, before relying on the hook's clone having worked**,
-check whether `~/.claude/plugins/claude-plugins` exists with all 5 plugin subdirectories. If not,
-call `add_repo` (owner `renfordn`, repo `claude-plugins`) once, then `git clone
-https://github.com/renfordn/claude-plugins ~/.claude/plugins/claude-plugins` directly (not into
-the default `/home/user/claude-plugins` workspace) — `add_repo` grants session-wide git-proxy
-access, so this one clone covers all 5 plugins, and a subsequent hook-issued `git clone`/`pull`
-to that path will also succeed on future SessionStarts. Treat a failed clone as blocking (it
-takes out all 3 hard dependencies — `agent-isdd`, `agent-tdd`, `code-reviewer` — plus the soft
-ones, `agent-nelly` and `agent-ux`); there's no partial-success case anymore since it's one repo.
+`renfordn/claude-plugins` is currently **public**, so this session's git proxy serves anonymous
+reads (clone/fetch) of it directly — the hook's plain `git clone` succeeds on its own with no
+`add_repo` call needed. `add_repo` on a public repo is a no-op for permissions (confirmed: it
+reports read access already available and attaches nothing).
+
+**If the repo is ever made private**, anonymous reads stop working and this changes: at the
+start of every new cloud session, before relying on the hook's clone having worked, check
+whether `~/.claude/plugins/claude-plugins` exists with all 5 plugin subdirectories. If not, call
+`add_repo` (owner `renfordn`, repo `claude-plugins`) — this is a session-scoped grant, not a
+persistent whitelist, so it must be called again in *every* fresh session, not just once — then
+`git clone https://github.com/renfordn/claude-plugins ~/.claude/plugins/claude-plugins` directly
+(not into the default `/home/user/claude-plugins` workspace). `add_repo` grants session-wide
+git-proxy access, so this one clone covers all 5 plugins, and a subsequent hook-issued `git
+clone`/`pull` to that path will also succeed for the rest of that same session.
+
+Either way, treat a failed clone as blocking (it takes out all 3 hard dependencies —
+`agent-isdd`, `agent-tdd`, `code-reviewer` — plus the soft ones, `agent-nelly` and `agent-ux`);
+there's no partial-success case since it's one repo.
 
 The former per-plugin repos (`renfordn/agent-isdd`, `agent-tdd`, `code-reviewer`, `agent-nelly`,
 `agent-ux`) are archived and no longer updated — do not add_repo or clone those individually.
