@@ -1,6 +1,6 @@
 {
   "env": {
-    "CLAUDE_PLUGINS_DIR": "$HOME/.claude/plugins"
+    "CLAUDE_PLUGINS_DIR": "$HOME/.claude/plugins/claude-plugins"
   },
   "hooks": {
     "SessionStart": [

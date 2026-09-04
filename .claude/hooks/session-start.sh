@@ -18,69 +18,54 @@ echo "✓ Python $PYTHON_VERSION available"
 # Clone and install plugin dependencies
 echo "📦 Setting up plugins..."
 
-PLUGINS_DIR="$HOME/.claude/plugins"
-mkdir -p "$PLUGINS_DIR"
-
-# Define plugins (hard + soft dependencies)
-declare -A PLUGINS=(
-  ["agent-isdd"]="https://github.com/renfordn/agent-isdd"
-  ["agent-tdd"]="https://github.com/renfordn/agent-tdd"
-  ["code-reviewer"]="https://github.com/renfordn/code-reviewer"
-  ["agent-nelly"]="https://github.com/renfordn/agent-nelly"
-  ["agent-ux"]="https://github.com/renfordn/agent-ux"
-)
-
-# Hard dependencies that must succeed
+# All 5 plugins live together in one repo (renfordn/claude-plugins), one
+# subdirectory per plugin, matching CapabilityMap's PLUGIN_PATHS layout.
+# CLAUDE_PLUGINS_DIR (.claude/settings.json) points straight at this clone.
+PLUGINS_REPO_URL="https://github.com/renfordn/claude-plugins"
+PLUGINS_DIR="$HOME/.claude/plugins/claude-plugins"
 HARD_DEPS=("agent-isdd" "agent-tdd" "code-reviewer")
+SOFT_DEPS=("agent-nelly" "agent-ux")
 
-FAILED_PLUGINS=()
-
-# Clone/pull and install dependencies for each plugin
-for plugin_name in "${!PLUGINS[@]}"; do
-  repo_url="${PLUGINS[$plugin_name]}"
-  plugin_path="$PLUGINS_DIR/$plugin_name"
-
-  is_hard=false
-  for hard_dep in "${HARD_DEPS[@]}"; do
-    if [[ "$plugin_name" == "$hard_dep" ]]; then
-      is_hard=true
-      break
-    fi
-  done
-
-  # Clone or update plugin
-  if [ -d "$plugin_path" ]; then
-    echo "  ↻ Updating $plugin_name..."
-    if ! (cd "$plugin_path" && git pull origin main --quiet 2>/dev/null); then
-      echo "  ⚠️  Failed to update $plugin_name"
-      if $is_hard; then FAILED_PLUGINS+=("$plugin_name"); fi
-    fi
-  else
-    echo "  ⬇️  Cloning $plugin_name..."
-    if ! git clone "$repo_url" "$plugin_path" --quiet 2>/dev/null; then
-      echo "  ❌ Failed to clone $plugin_name"
-      if $is_hard; then FAILED_PLUGINS+=("$plugin_name"); fi
-      continue
-    fi
+if [ -d "$PLUGINS_DIR" ]; then
+  echo "  ↻ Updating claude-plugins..."
+  if ! (cd "$PLUGINS_DIR" && git pull origin main --quiet 2>/dev/null); then
+    echo "  ⚠️  Failed to update claude-plugins (using existing checkout)"
   fi
-
-  # Install Python dependencies if requirements.txt exists
-  if [ -f "$plugin_path/requirements.txt" ]; then
-    echo "  🔧 Installing dependencies for $plugin_name..."
-    if ! python3 -m pip install -r "$plugin_path/requirements.txt" --quiet 2>/dev/null; then
-      echo "  ⚠️  Failed to install dependencies for $plugin_name"
-      if $is_hard; then FAILED_PLUGINS+=("$plugin_name"); fi
-    fi
+else
+  echo "  ⬇️  Cloning claude-plugins..."
+  mkdir -p "$(dirname "$PLUGINS_DIR")"
+  if ! git clone "$PLUGINS_REPO_URL" "$PLUGINS_DIR" --quiet 2>/dev/null; then
+    echo "  ❌ Failed to clone claude-plugins"
+    echo "     If this is a fresh cloud session, this repo must be attached via"
+    echo "     add_repo before a plain git clone can succeed here — see"
+    echo "     .claude/CLAUDE.md's \"Cloud Session Bootstrap\" section."
+    echo "❌ Failed to set up hard dependencies: ${HARD_DEPS[*]}"
+    exit 1
   fi
+fi
 
-  echo "  ✓ $plugin_name ready"
+MISSING_HARD=()
+for plugin_name in "${HARD_DEPS[@]}"; do
+  [ -d "$PLUGINS_DIR/$plugin_name" ] || MISSING_HARD+=("$plugin_name")
 done
-
-# Check if hard dependencies failed
-if [ ${#FAILED_PLUGINS[@]} -gt 0 ]; then
-  echo "❌ Failed to set up hard dependencies: ${FAILED_PLUGINS[*]}"
+if [ ${#MISSING_HARD[@]} -gt 0 ]; then
+  echo "❌ Missing hard-dependency plugin directories: ${MISSING_HARD[*]}"
   exit 1
 fi
+
+for plugin_name in "${SOFT_DEPS[@]}"; do
+  [ -d "$PLUGINS_DIR/$plugin_name" ] || echo "  ⚠️  Soft-dependency plugin missing: $plugin_name (continuing)"
+done
+
+# Install each plugin's Python dependencies if it declares any
+for plugin_dir in "$PLUGINS_DIR"/*/; do
+  plugin_name="$(basename "$plugin_dir")"
+  if [ -f "$plugin_dir/requirements.txt" ]; then
+    echo "  🔧 Installing dependencies for $plugin_name..."
+    python3 -m pip install -r "$plugin_dir/requirements.txt" --quiet 2>/dev/null \
+      || echo "  ⚠️  Failed to install dependencies for $plugin_name"
+  fi
+done
 
 echo "✅ All plugins installed"
 echo ""
