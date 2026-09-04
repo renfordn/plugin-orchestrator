@@ -2,10 +2,13 @@
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,8 +63,14 @@ class CapabilityMap:
     def _parse_all_plugins(self) -> None:
         """Parse all INTEROP.md files and build registry.
 
-        Gracefully handles missing files and parsing errors by creating
-        empty plugin entries. Each plugin gets a hash for change detection.
+        Implements graceful degradation: if a plugin's INTEROP file is missing or
+        cannot be parsed, creates an empty PluginInfo entry instead of failing.
+        This allows the orchestrator to:
+        - Continue operating when some plugins are unavailable
+        - Detect plugins as they become available later
+        - Log missing plugins without blocking workflow
+
+        Each plugin gets an MD5 hash of its INTEROP content for change detection.
         """
         for plugin_name, rel_path in self.PLUGIN_PATHS.items():
             plugin_info = self._load_plugin(plugin_name, rel_path)
@@ -71,12 +80,17 @@ class CapabilityMap:
         """
         Load a single plugin's INTEROP file and create PluginInfo.
 
+        Implements graceful degradation: if a plugin's INTEROP file is missing or
+        cannot be parsed, logs a debug message and returns an empty PluginInfo entry.
+        This allows the orchestrator to continue operating even if some plugins are
+        unavailable or misconfigured.
+
         Args:
             plugin_name: Name of the plugin
             rel_path: Relative path to INTEROP/STRUCTURE file
 
         Returns:
-            PluginInfo object (empty if file not found)
+            PluginInfo object (empty if file not found or parsing fails)
         """
         interop_path = self.plugin_dir_base / rel_path
 
@@ -87,10 +101,12 @@ class CapabilityMap:
                 self.interop_hashes[plugin_name] = hash_val
                 return self._parse_plugin_file(plugin_name, content)
         except Exception as e:
-            # Log error but continue; create empty plugin entry
-            pass
+            logger.debug(
+                f"Failed to load {plugin_name} INTEROP file from {interop_path}: {e}. "
+                f"Creating empty plugin entry for graceful degradation."
+            )
 
-        # Fallback: create empty plugin entry
+        # Fallback: create empty plugin entry for graceful degradation
         self.interop_hashes[plugin_name] = ""
         return PluginInfo(name=plugin_name)
 
