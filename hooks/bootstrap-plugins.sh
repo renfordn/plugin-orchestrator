@@ -15,6 +15,11 @@ fi
 
 PLUGINS_REPO_URL="https://github.com/renfordn/claude-plugins"
 PLUGINS_DIR="${CLAUDE_PLUGINS_DIR:-$HOME/.claude/plugins/claude-plugins}"
+# CLAUDE_PLUGINS_DIR may come from settings.json, where "$HOME" is a literal
+# string (JSON env values aren't shell-expanded), not an expanded path. Expand
+# it here so this resolves to the same real directory as
+# orchestrator/interop_parser.py's expandvars(expanduser(...)).
+PLUGINS_DIR="$(eval echo "$PLUGINS_DIR")"
 HARD_DEPS=("agent-isdd" "agent-tdd" "code-reviewer")
 SOFT_DEPS=("agent-nelly" "agent-ux")
 
