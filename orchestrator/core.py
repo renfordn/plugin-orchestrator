@@ -245,6 +245,10 @@ class PluginRouter:
         if not isinstance(payload, dict):
             raise TypeError(f"payload must be dict, got {type(payload).__name__}")
 
+        # Pick up any INTEROP.md changes since the last handoff (hot-reload)
+        # so validation always runs against each plugin's current contract.
+        self.capability_map.refresh()
+
         # Validate source capability exists
         source_cap = self.capability_map.find_capability(
             source_plugin,
