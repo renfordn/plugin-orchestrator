@@ -50,14 +50,20 @@ class CapabilityMap:
         Args:
             plugin_dir_base: Base directory containing all plugin folders.
                             Defaults to environment variable CLAUDE_PLUGINS_DIR if set,
-                            otherwise creates empty registry.
+                            otherwise ~/.claude/plugins/claude-plugins (the standard
+                            bootstrap location), falling back to test fixtures only
+                            when neither exists.
         """
         if plugin_dir_base is None:
             env_dir = os.environ.get("CLAUDE_PLUGINS_DIR")
             if env_dir:
                 plugin_dir_base = Path(os.path.expanduser(os.path.expandvars(env_dir)))
             else:
-                plugin_dir_base = Path(__file__).parent.parent / "tests" / "fixtures"
+                default_dir = Path.home() / ".claude" / "plugins" / "claude-plugins"
+                if default_dir.exists():
+                    plugin_dir_base = default_dir
+                else:
+                    plugin_dir_base = Path(__file__).parent.parent / "tests" / "fixtures"
 
         self.plugin_dir_base = Path(plugin_dir_base)
         self.plugins: Dict[str, PluginInfo] = {}

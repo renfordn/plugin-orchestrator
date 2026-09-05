@@ -4,6 +4,25 @@ Caching-first workflow router that coordinates the `agent-isdd` → `agent-tdd` 
 `code-reviewer` handoff chain, distributes the `agent-nelly` memory brief once,
 and validates handoff payloads against `INTEROP.md` capability contracts.
 
+## Using this on other projects (incl. cloud sessions)
+
+This repo doubles as a Claude Code plugin (`.claude-plugin/`). Installing it
+into any other project via the marketplace is what makes it portable — no
+per-project `.claude/settings.json` copying required:
+
+```
+/plugin marketplace add renfordn/plugin-orchestrator
+/plugin install plugin-orchestrator
+```
+
+Once installed, the plugin's own `SessionStart` hook
+([hooks/bootstrap-plugins.sh](hooks/bootstrap-plugins.sh)) clones/updates
+`renfordn/claude-plugins` into `~/.claude/plugins/claude-plugins` on its own,
+and `CapabilityMap()` defaults to that path when `CLAUDE_PLUGINS_DIR` isn't
+set — so a fresh cloud session (phone, web, wherever) bootstraps the same
+`agent-isdd` / `agent-tdd` / `code-reviewer` / `agent-nelly` / `agent-ux`
+dependency set with zero host-project configuration.
+
 ## Scope: this is not a standalone, general-purpose harness
 
 `plugin-orchestrator` only activates *inside an active `agent-isdd` SDD
