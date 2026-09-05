@@ -328,6 +328,30 @@ class CapabilityMap:
 
         return plugin.is_soft_dependency
 
+    def refresh(self) -> List[str]:
+        """
+        Re-parse INTEROP files whose content changed on disk, in place.
+
+        Compares each plugin's current MD5 hash against a freshly computed one
+        and only re-loads plugins that actually changed, so unaffected plugins
+        keep their existing PluginInfo objects. Enables picking up plugin
+        capability changes without recreating CapabilityMap (session restart).
+
+        Returns:
+            List of plugin names whose INTEROP file changed and were reloaded.
+        """
+        changed_plugins = []
+
+        for plugin_name, rel_path in self.PLUGIN_PATHS.items():
+            previous_hash = self.interop_hashes.get(plugin_name, "")
+            plugin_info = self._load_plugin(plugin_name, rel_path)
+
+            if self.interop_hashes.get(plugin_name, "") != previous_hash:
+                self.plugins[plugin_name] = plugin_info
+                changed_plugins.append(plugin_name)
+
+        return changed_plugins
+
     def get_interop_hashes(self) -> Dict[str, str]:
         """
         Get current INTEROP file hashes.
