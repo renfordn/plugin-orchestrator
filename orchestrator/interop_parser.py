@@ -312,6 +312,63 @@ class CapabilityMap:
 
         return True, None
 
+    _JSON_TYPES = {
+        "string": str,
+        "object": dict,
+        "array": list,
+        "number": (int, float),
+        "integer": int,
+        "boolean": bool,
+    }
+
+    def validate_input_schema(
+        self,
+        plugin_name: str,
+        capability_id: str,
+        input_shape: dict
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Validate input against capability's consumes contract, including declared
+        JSON types (string/object/array/number/integer/boolean), not just presence.
+
+        Args:
+            plugin_name: Name of the plugin
+            capability_id: ID of the capability
+            input_shape: Input data to validate
+
+        Returns:
+            Tuple of (is_valid, error_reason)
+        """
+        capability = self.find_capability(plugin_name, capability_id)
+        if not capability:
+            return False, f"Capability '{capability_id}' not found in {plugin_name}"
+
+        for field_name, declared_type in capability.consumes.items():
+            if field_name not in input_shape:
+                return False, f"Missing required field: {field_name}"
+
+            expected_type = self._JSON_TYPES.get(declared_type)
+            if expected_type is None:
+                continue  # Unknown declared type; skip type enforcement
+
+            value = input_shape[field_name]
+            # bool is a subclass of int in Python; keep "integer"/"number" from
+            # accepting booleans since JSON Schema treats them as distinct types.
+            if expected_type in (int, (int, float)) and isinstance(value, bool):
+                return False, (
+                    f"Field '{field_name}' expected type '{declared_type}', "
+                    f"got 'boolean'"
+                )
+
+            if not isinstance(value, expected_type):
+                actual_type = type(value).__name__
+                return False, (
+                    f"Field '{field_name}' expected type '{declared_type}', "
+                    f"got '{actual_type}'"
+                )
+
+        return True, None
+
     def is_soft_dependency(self, plugin_name: str) -> bool:
         """
         Check if plugin is optional (soft dependency).

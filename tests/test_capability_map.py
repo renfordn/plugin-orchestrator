@@ -111,6 +111,73 @@ class TestCapabilityMapParsing(unittest.TestCase):
         self.assertFalse(is_valid)
         self.assertIsNotNone(error)
 
+    def test_validate_input_schema_valid_types(self):
+        """Test schema validation accepts input matching declared JSON types."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        valid_input = {
+            "requirements_md": "content",
+            "design_md": "content",
+            "research_cache": {"key": "value"},
+            "recap_md": "content"
+        }
+
+        is_valid, error = cap_map.validate_input_schema(
+            "agent-tdd",
+            "design_spec_slicing",
+            valid_input
+        )
+
+        self.assertTrue(is_valid)
+        self.assertIsNone(error)
+
+    def test_validate_input_schema_type_mismatch(self):
+        """Test schema validation rejects a field whose type doesn't match consumes contract."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        # research_cache is declared "object" but given a string
+        invalid_input = {
+            "requirements_md": "content",
+            "design_md": "content",
+            "research_cache": "not-an-object",
+            "recap_md": "content"
+        }
+
+        is_valid, error = cap_map.validate_input_schema(
+            "agent-tdd",
+            "design_spec_slicing",
+            invalid_input
+        )
+
+        self.assertFalse(is_valid)
+        self.assertIn("research_cache", error)
+
+    def test_validate_input_schema_missing_field(self):
+        """Test schema validation still reports missing required fields."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        is_valid, error = cap_map.validate_input_schema(
+            "agent-tdd",
+            "design_spec_slicing",
+            {"foo": "bar"}
+        )
+
+        self.assertFalse(is_valid)
+        self.assertIsNotNone(error)
+
+    def test_validate_input_schema_unknown_capability(self):
+        """Test schema validation on an unknown capability returns an error."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        is_valid, error = cap_map.validate_input_schema(
+            "agent-isdd",
+            "nonexistent_capability",
+            {}
+        )
+
+        self.assertFalse(is_valid)
+        self.assertIsNotNone(error)
+
     def test_is_soft_dependency_agent_nelly(self):
         """Test agent-nelly is recognized as soft dependency."""
         cap_map = CapabilityMap(str(self.plugin_dir))
