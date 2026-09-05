@@ -22,6 +22,7 @@ import warnings
 from pathlib import Path
 from typing import Optional, Tuple
 from orchestrator.interop_parser import CapabilityMap
+from orchestrator.checkpoint import CheckpointManager
 
 DEFAULT_ROUTING_TABLE_PATH = Path(__file__).parent / "routing_table.json"
 
@@ -282,7 +283,9 @@ class PluginRouter:
         self,
         current_plugin: str,
         current_phase: str,
-        handoff_valid: bool
+        handoff_valid: bool,
+        workflow_state: Optional[dict] = None,
+        checkpoint_manager: Optional[CheckpointManager] = None
     ) -> Optional[str]:
         """Determine next plugin in workflow sequence.
 
@@ -300,6 +303,12 @@ class PluginRouter:
                 "red_green_refactor_complete").
             handoff_valid: Whether the preceding handoff (if any) was valid.
                 If False, workflow is paused and None is returned.
+            workflow_state: Optional workflow state dict. When provided together
+                with checkpoint_manager, a checkpoint is recorded before routing
+                to a next plugin (enabling rollback via CheckpointManager).
+            checkpoint_manager: Optional CheckpointManager instance used to
+                create the pre-handoff checkpoint. Ignored if workflow_state
+                is not also provided.
 
         Returns:
             Name of next plugin to route to, or None to pause/end workflow.
@@ -321,7 +330,12 @@ class PluginRouter:
 
         # Look up routing table: (plugin, phase) -> next_plugin
         route_key = (current_plugin, current_phase)
-        return self.ROUTING_TABLE.get(route_key)
+        next_plugin = self.ROUTING_TABLE.get(route_key)
+
+        if next_plugin is not None and workflow_state is not None and checkpoint_manager is not None:
+            checkpoint_manager.create_checkpoint(workflow_state, f"before_{next_plugin}_spawn")
+
+        return next_plugin
 
     # ===== Private Helpers =====
 
