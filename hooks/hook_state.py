@@ -10,9 +10,12 @@ and agent-tdd) -- kept here as a small, dependency-free copy since this plugin's
 CLAUDE_PLUGIN_ROOT is a separate directory tree from agent-isdd's.
 """
 import glob
-import json
 import os
 import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestrator.state_store import FileStateStore  # noqa: E402
 
 BASE = os.path.join(os.path.expanduser("~"), ".claude", "sdd-memory")
 
@@ -45,17 +48,30 @@ def workflow_state_path(cwd):
     return os.path.join(feature_dir, "workflow-state.json")
 
 
+def _state_store_for(path):
+    """Build a FileStateStore + workflow_id addressing the exact given path.
+
+    FileStateStore addresses files by (directory, workflow_id) -> "<workflow_id>.json"
+    within that directory; the workflow_id here is just the path's basename
+    minus ".json", so the file written is the exact path the caller gave us.
+    """
+    directory = os.path.dirname(path) or "."
+    workflow_id = os.path.basename(path)
+    if workflow_id.endswith(".json"):
+        workflow_id = workflow_id[: -len(".json")]
+    return FileStateStore(directory), workflow_id
+
+
 def load_workflow_state(path):
     """Load workflow-state.json into a dict, tolerant of a missing or malformed file."""
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
+        store, workflow_id = _state_store_for(path)
+        return store.get(workflow_id)
     except (OSError, ValueError):
         return {}
 
 
 def save_workflow_state(path, data):
-    """Write workflow-state.json back to disk (2-space indent, trailing newline)."""
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-        fh.write("\n")
+    """Write workflow-state.json back to disk (atomic write, advisory lock)."""
+    store, workflow_id = _state_store_for(path)
+    store.save(workflow_id, data)
