@@ -18,11 +18,13 @@ If any handoff fails validation, the workflow pauses (returns None).
 """
 
 import json
+import time
 import warnings
 from pathlib import Path
 from typing import Optional, Tuple
 from orchestrator.interop_parser import CapabilityMap
 from orchestrator.checkpoint import CheckpointManager
+from orchestrator.telemetry import TelemetryPublisher
 
 DEFAULT_ROUTING_TABLE_PATH = Path(__file__).parent / "routing_table.json"
 
@@ -49,7 +51,8 @@ class PluginRouter:
     def __init__(
         self,
         capability_map: CapabilityMap,
-        routing_table_path: Optional[str] = None
+        routing_table_path: Optional[str] = None,
+        telemetry: Optional[TelemetryPublisher] = None
     ):
         """Initialize PluginRouter with CapabilityMap for contract queries.
 
@@ -59,6 +62,10 @@ class PluginRouter:
             routing_table_path: Optional path to a routing table JSON file
                 (see orchestrator/routing_table.json for the schema). Defaults
                 to the bundled routing_table.json next to this module.
+            telemetry: Optional TelemetryPublisher. When provided, availability
+                checks, handoff validation, and routing decisions emit events
+                to it for external monitoring. Router works identically with
+                no telemetry configured.
 
         Raises:
             TypeError: If capability_map is None or not a CapabilityMap instance.
@@ -66,6 +73,7 @@ class PluginRouter:
         if capability_map is None:
             raise TypeError("capability_map cannot be None")
         self.capability_map = capability_map
+        self.telemetry = telemetry
         self.ROUTING_TABLE = self._load_routing_table(
             routing_table_path or DEFAULT_ROUTING_TABLE_PATH
         )
@@ -144,11 +152,18 @@ class PluginRouter:
 
         # Handle code-reviewer special case (no "agent-" prefix in INTEROP)
         if normalized_name == "code-reviewer":
-            return "code-reviewer:" in system_reminder
+            available = "code-reviewer:" in system_reminder
+        else:
+            # Standard pattern: agent-<name>:
+            pattern = f"{normalized_name}:"
+            available = pattern in system_reminder
 
-        # Standard pattern: agent-<name>:
-        pattern = f"{normalized_name}:"
-        return pattern in system_reminder
+        if self.telemetry:
+            self.telemetry.emit(
+                "availability_check", plugin=normalized_name, available=available
+            )
+
+        return available
 
     def is_hard_dependency(self, plugin_name: str) -> bool:
         """Check if plugin is a hard dependency (blocks workflow if unavailable).
@@ -246,6 +261,41 @@ class PluginRouter:
         if not isinstance(payload, dict):
             raise TypeError(f"payload must be dict, got {type(payload).__name__}")
 
+        start = time.perf_counter()
+        result = self._validate_handoff_uncounted(
+            source_plugin, source_capability_id,
+            target_plugin, target_capability_id,
+            payload
+        )
+        duration_ms = (time.perf_counter() - start) * 1000
+        is_valid, error = result
+
+        if self.telemetry:
+            self.telemetry.emit(
+                "handoff",
+                source=source_plugin,
+                target=target_plugin,
+                success=is_valid,
+                error=error,
+                duration_ms=duration_ms,
+                metadata={
+                    "source_capability": source_capability_id,
+                    "target_capability": target_capability_id,
+                    "payload_size": len(payload),
+                }
+            )
+
+        return result
+
+    def _validate_handoff_uncounted(
+        self,
+        source_plugin: str,
+        source_capability_id: str,
+        target_plugin: str,
+        target_capability_id: str,
+        payload: dict
+    ) -> Tuple[bool, Optional[str]]:
+        """Core handoff validation logic, without telemetry timing wrapper."""
         # Pick up any INTEROP.md changes since the last handoff (hot-reload)
         # so validation always runs against each plugin's current contract.
         self.capability_map.refresh()
@@ -334,6 +384,14 @@ class PluginRouter:
 
         if next_plugin is not None and workflow_state is not None and checkpoint_manager is not None:
             checkpoint_manager.create_checkpoint(workflow_state, f"before_{next_plugin}_spawn")
+
+        if self.telemetry:
+            self.telemetry.emit(
+                "routing",
+                current_plugin=current_plugin,
+                current_phase=current_phase,
+                next_plugin=next_plugin,
+            )
 
         return next_plugin
 
