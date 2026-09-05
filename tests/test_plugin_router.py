@@ -3,6 +3,7 @@
 import unittest
 from orchestrator.core import PluginRouter
 from orchestrator.interop_parser import CapabilityMap
+from orchestrator.checkpoint import CheckpointManager
 
 
 class TestPluginRouterInitialization(unittest.TestCase):
@@ -344,6 +345,69 @@ class TestPluginRouterSequencing(unittest.TestCase):
         )
 
         self.assertIsNone(next_plugin)
+
+
+class TestPluginRouterCheckpointing(unittest.TestCase):
+    """Test route_to_next_plugin auto-checkpointing via CheckpointManager."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        plugin_dir = "/Users/jay.nelson/Codebase/AI/plugins/claude"
+        self.capability_map = CapabilityMap(plugin_dir)
+        self.router = PluginRouter(self.capability_map)
+        self.checkpoint_manager = CheckpointManager()
+        self.workflow_state = {}
+
+    def test_checkpoint_created_before_valid_handoff_routes(self):
+        """A checkpoint is created when routing to a next plugin."""
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd",
+            "design_approved",
+            handoff_valid=True,
+            workflow_state=self.workflow_state,
+            checkpoint_manager=self.checkpoint_manager
+        )
+
+        self.assertEqual(next_plugin, "agent-tdd")
+        history = self.checkpoint_manager.get_checkpoint_history(self.workflow_state)
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["label"], "before_agent-tdd_spawn")
+
+    def test_no_checkpoint_created_when_workflow_ends(self):
+        """No checkpoint is created when there is no next plugin to route to."""
+        self.router.route_to_next_plugin(
+            "code-reviewer",
+            "review_complete",
+            handoff_valid=True,
+            workflow_state=self.workflow_state,
+            checkpoint_manager=self.checkpoint_manager
+        )
+
+        history = self.checkpoint_manager.get_checkpoint_history(self.workflow_state)
+        self.assertEqual(history, [])
+
+    def test_no_checkpoint_created_on_invalid_handoff(self):
+        """No checkpoint is created when the handoff itself was invalid."""
+        self.router.route_to_next_plugin(
+            "agent-isdd",
+            "design_approved",
+            handoff_valid=False,
+            workflow_state=self.workflow_state,
+            checkpoint_manager=self.checkpoint_manager
+        )
+
+        history = self.checkpoint_manager.get_checkpoint_history(self.workflow_state)
+        self.assertEqual(history, [])
+
+    def test_no_checkpoint_manager_is_backward_compatible(self):
+        """Omitting workflow_state/checkpoint_manager still routes normally."""
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd",
+            "design_approved",
+            handoff_valid=True
+        )
+
+        self.assertEqual(next_plugin, "agent-tdd")
 
 
 if __name__ == "__main__":
