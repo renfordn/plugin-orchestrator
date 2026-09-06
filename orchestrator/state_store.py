@@ -127,6 +127,15 @@ class RedisStateStore(WorkflowStateStore):
     An explicit constructor argument always wins over its environment
     variable, and either can be overridden per Redis kwarg (e.g. passing
     host= alone still picks up REDIS_PORT/REDIS_DB from the environment).
+
+    Running Redis on a private Tailscale network (rather than exposing it
+    publicly) needs no special support here - just point REDIS_HOST (or the
+    host= kwarg) at the box's Tailscale address:
+        REDIS_HOST=redis-box.tailnet-name.ts.net   # MagicDNS name, or
+        REDIS_HOST=100.x.y.z                       # tailnet IP directly
+    Both resolve/connect the same way any other hostname or IP would; the
+    orchestrator process just needs to be on the same tailnet (`tailscale up`)
+    for either to be reachable.
     """
 
     _ENV_KWARGS = {

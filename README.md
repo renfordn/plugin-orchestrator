@@ -86,6 +86,27 @@ Declared as `optionalDependencies` in
 missing), `agent-nelly`, `agent-ux`, `agent-cache-plugin` (soft — logged,
 routing continues without them).
 
+## Distributed workflow state (Redis)
+
+`orchestrator.state_store.RedisStateStore` shares workflow state across
+machines (`FileStateStore` only covers processes on one host). Configure it
+via `REDIS_HOST`/`REDIS_PORT`/`REDIS_DB`/`REDIS_PASSWORD`/`REDIS_KEY_PREFIX`
+environment variables, or the matching constructor kwargs, which take
+precedence.
+
+To keep Redis off the public internet, run it on a private
+[Tailscale](https://tailscale.com) network and point `REDIS_HOST` at the
+box's tailnet address — no other setup needed, since a tailnet address
+resolves/connects like any other host:
+
+```bash
+export REDIS_HOST=redis-box.your-tailnet.ts.net   # MagicDNS name, or
+export REDIS_HOST=100.x.y.z                       # tailnet IP directly
+```
+
+The orchestrator process just needs to be on the same tailnet (`tailscale up`)
+for that address to be reachable.
+
 ## Tests
 
 ```bash
