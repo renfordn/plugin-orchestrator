@@ -17,6 +17,8 @@ Example workflow sequence:
 If any handoff fails validation, the workflow pauses (returns None).
 """
 
+import asyncio
+import hashlib
 import json
 import time
 import warnings
@@ -40,6 +42,9 @@ class PluginRouter:
         ROUTING_TABLE: Deterministic routing by (plugin, phase) tuple, loaded from
             routing_table.json (see routing_table_path on __init__) rather than
             hardcoded, so new workflow sequences don't require editing this module.
+            Hot-reloaded from disk on each route_to_next_plugin() call (see
+            refresh_routing_table()) so edits take effect without recreating
+            the router.
     """
 
     # Hard dependencies: required for workflow continuation
@@ -47,6 +52,10 @@ class PluginRouter:
 
     # Soft dependencies: optional (log if unavailable, continue)
     SOFT_DEPENDENCIES = {"agent-nelly", "agent-ux", "agent-cache-plugin"}
+
+    # Sentinel a routing policy returns to defer to ROUTING_TABLE for this
+    # decision, distinguishing "no opinion" from "end the workflow" (None).
+    USE_DEFAULT_ROUTE = object()
 
     def __init__(
         self,
@@ -74,9 +83,93 @@ class PluginRouter:
             raise TypeError("capability_map cannot be None")
         self.capability_map = capability_map
         self.telemetry = telemetry
-        self.ROUTING_TABLE = self._load_routing_table(
-            routing_table_path or DEFAULT_ROUTING_TABLE_PATH
-        )
+        self._routing_table_path = routing_table_path or DEFAULT_ROUTING_TABLE_PATH
+        self.ROUTING_TABLE = self._load_routing_table(self._routing_table_path)
+        self._routing_table_hash = self._hash_routing_table_file(self._routing_table_path)
+        self._routing_policy = None
+        self._payload_mappings = {}
+        self._payload_transformer = None
+
+    def set_payload_mapping(self, source_plugin: str, target_plugin: str, mapping: dict) -> None:
+        """Register a field-rename mapping applied to (source_plugin -> target_plugin) payloads.
+
+        Args:
+            source_plugin: Name of the sending plugin.
+            target_plugin: Name of the receiving plugin.
+            mapping: Dict of {source_field_name: target_field_name}. Renamed
+                during transform_payload()/validate_handoff() so a source's
+                output field names can satisfy a target's differently-named
+                consumes contract without either plugin knowing about the other.
+        """
+        self._payload_mappings[(source_plugin, target_plugin)] = mapping
+
+    def clear_payload_mapping(self, source_plugin: str, target_plugin: str) -> None:
+        """Remove a previously registered field-rename mapping, if any."""
+        self._payload_mappings.pop((source_plugin, target_plugin), None)
+
+    def set_payload_transformer(self, transformer) -> None:
+        """Register a custom payload transformer, applied after field mapping.
+
+        Args:
+            transformer: Callable(source_plugin, source_capability_id,
+                target_plugin, target_capability_id, payload) -> dict. Runs
+                after any registered field-rename mapping, for transformations
+                a simple rename can't express (reshaping, defaults, derived
+                fields).
+        """
+        self._payload_transformer = transformer
+
+    def clear_payload_transformer(self) -> None:
+        """Remove any custom payload transformer."""
+        self._payload_transformer = None
+
+    def transform_payload(
+        self,
+        source_plugin: str,
+        source_capability_id: str,
+        target_plugin: str,
+        target_capability_id: str,
+        payload: dict
+    ) -> dict:
+        """Apply registered field mapping and transformer to a handoff payload.
+
+        Never mutates the input payload. With nothing registered, returns a
+        shallow copy unchanged.
+
+        Returns:
+            A new dict: payload with (source_plugin, target_plugin)'s field
+            mapping applied, then the custom transformer if one is set.
+        """
+        result = dict(payload)
+
+        mapping = self._payload_mappings.get((source_plugin, target_plugin))
+        if mapping:
+            for src_field, dst_field in mapping.items():
+                if src_field in result:
+                    result[dst_field] = result.pop(src_field)
+
+        if self._payload_transformer is not None:
+            result = self._payload_transformer(
+                source_plugin, source_capability_id, target_plugin, target_capability_id, result
+            )
+
+        return result
+
+    def set_routing_policy(self, policy) -> None:
+        """Register a custom routing policy, overriding ROUTING_TABLE lookups.
+
+        Args:
+            policy: Callable(current_plugin, current_phase, workflow_state) ->
+                Optional[str]. Called on every valid handoff before consulting
+                ROUTING_TABLE. Return a plugin name to route there, None to end
+                the workflow, or PluginRouter.USE_DEFAULT_ROUTE to defer to the
+                static ROUTING_TABLE for that decision.
+        """
+        self._routing_policy = policy
+
+    def clear_routing_policy(self) -> None:
+        """Remove any custom routing policy, restoring pure ROUTING_TABLE routing."""
+        self._routing_policy = None
 
     def _load_routing_table(self, path) -> dict:
         """Load (plugin, phase) -> next_plugin routes from a JSON config file.
@@ -108,6 +201,36 @@ class PluginRouter:
                     )
 
         return table
+
+    @staticmethod
+    def _hash_routing_table_file(path) -> str:
+        """MD5 hash of the routing table file's contents, or "" if unreadable."""
+        try:
+            with open(path, "rb") as f:
+                return hashlib.md5(f.read()).hexdigest()
+        except OSError:
+            return ""
+
+    def refresh_routing_table(self) -> bool:
+        """Re-load ROUTING_TABLE from disk if the file changed, in place.
+
+        Lets an operator edit routing_table.json (add/change a route) while
+        the orchestrator session is running, and have PluginRouter pick it up
+        on the next routing decision without recreating the router - the same
+        hot-reload model CapabilityMap.refresh() applies to INTEROP.md files.
+        Cheap no-op when the file is unchanged (hash compare, no re-parse).
+
+        Returns:
+            True if the file changed and ROUTING_TABLE was reloaded, False
+            otherwise.
+        """
+        current_hash = self._hash_routing_table_file(self._routing_table_path)
+        if current_hash == self._routing_table_hash:
+            return False
+
+        self.ROUTING_TABLE = self._load_routing_table(self._routing_table_path)
+        self._routing_table_hash = current_hash
+        return True
 
     def check_plugin_availability(
         self,
@@ -219,7 +342,9 @@ class PluginRouter:
         Validates that:
         1. Source plugin declares the source_capability_id
         2. Target plugin declares the target_capability_id
-        3. Payload contains all required fields from target's consumes contract
+        3. Payload, after any registered field mapping/transformer (see
+           set_payload_mapping/set_payload_transformer), contains all required
+           fields from target's consumes contract
 
         This ensures plugin-to-plugin handoffs match contractual expectations
         defined in INTEROP.md files (parsed by CapabilityMap).
@@ -287,6 +412,41 @@ class PluginRouter:
 
         return result
 
+    async def validate_handoff_async(
+        self,
+        source_plugin: str,
+        source_capability_id: str,
+        target_plugin: str,
+        target_capability_id: str,
+        payload: dict
+    ) -> Tuple[bool, Optional[str]]:
+        """Async wrapper for validate_handoff, for high-concurrency workflows.
+
+        Validation is CPU-bound and sub-millisecond, so this offers no
+        speedup on its own; its purpose is letting many independent handoffs
+        be validated concurrently (e.g. via asyncio.gather) from an
+        asyncio-based orchestrator without blocking the event loop on each
+        one, by offloading each call to a worker thread. Semantics (including
+        raised exceptions and telemetry emission) are identical to
+        validate_handoff.
+
+        Args:
+            source_plugin: Name of sending plugin.
+            source_capability_id: Capability ID from source.
+            target_plugin: Name of receiving plugin.
+            target_capability_id: Capability ID expected by target.
+            payload: Handoff data (dict).
+
+        Returns:
+            Tuple of (is_valid, error_reason), same as validate_handoff.
+        """
+        return await asyncio.to_thread(
+            self.validate_handoff,
+            source_plugin, source_capability_id,
+            target_plugin, target_capability_id,
+            payload
+        )
+
     def _validate_handoff_uncounted(
         self,
         source_plugin: str,
@@ -322,8 +482,15 @@ class PluginRouter:
                 f"Target capability '{target_capability_id}' not found in {target_plugin}"
             )
 
+        # Apply any registered field mapping/transformer before contract
+        # validation, so renamed/reshaped fields still satisfy the target's
+        # consumes contract.
+        transformed_payload = self.transform_payload(
+            source_plugin, source_capability_id, target_plugin, target_capability_id, payload
+        )
+
         # Validate payload matches target's consumes contract
-        is_valid, error = self._validate_payload_contract(target_cap, payload)
+        is_valid, error = self._validate_payload_contract(target_cap, transformed_payload)
         if not is_valid:
             return False, error
 
@@ -342,10 +509,20 @@ class PluginRouter:
         Routes execution based on current plugin and phase. If the preceding
         handoff was invalid, returns None to halt the workflow.
 
+        If a routing policy is registered via set_routing_policy(), it is
+        consulted first; ROUTING_TABLE is only used when no policy is set or
+        the policy returns PluginRouter.USE_DEFAULT_ROUTE.
+
         Defined routes (from ROUTING_TABLE):
         - agent-isdd + design_approved → agent-tdd
         - agent-tdd + red_green_refactor_complete → code-reviewer
         - code-reviewer + review_complete → None (end workflow)
+
+        When workflow_state and checkpoint_manager are both provided, every
+        call (including invalid handoffs and end-of-workflow) is appended to
+        the workflow's handoff history log (see
+        CheckpointManager.record_handoff/get_handoff_history), in addition to
+        the pre-handoff checkpoint created only when routing to a next plugin.
 
         Args:
             current_plugin: Name of currently executing plugin.
@@ -376,14 +553,36 @@ class PluginRouter:
         """
         # Invalid handoff halts workflow
         if not handoff_valid:
+            if workflow_state is not None and checkpoint_manager is not None:
+                checkpoint_manager.record_handoff(workflow_state, {
+                    "current_plugin": current_plugin,
+                    "current_phase": current_phase,
+                    "handoff_valid": False,
+                    "next_plugin": None,
+                })
             return None
 
-        # Look up routing table: (plugin, phase) -> next_plugin
-        route_key = (current_plugin, current_phase)
-        next_plugin = self.ROUTING_TABLE.get(route_key)
+        next_plugin = self.USE_DEFAULT_ROUTE
+        if self._routing_policy is not None:
+            next_plugin = self._routing_policy(current_plugin, current_phase, workflow_state)
 
-        if next_plugin is not None and workflow_state is not None and checkpoint_manager is not None:
-            checkpoint_manager.create_checkpoint(workflow_state, f"before_{next_plugin}_spawn")
+        if next_plugin is self.USE_DEFAULT_ROUTE:
+            # Pick up any routing_table.json edits since the last call
+            # (hot-reload), so routing always uses the current table.
+            self.refresh_routing_table()
+            # Look up routing table: (plugin, phase) -> next_plugin
+            route_key = (current_plugin, current_phase)
+            next_plugin = self.ROUTING_TABLE.get(route_key)
+
+        if workflow_state is not None and checkpoint_manager is not None:
+            if next_plugin is not None:
+                checkpoint_manager.create_checkpoint(workflow_state, f"before_{next_plugin}_spawn")
+            checkpoint_manager.record_handoff(workflow_state, {
+                "current_plugin": current_plugin,
+                "current_phase": current_phase,
+                "handoff_valid": True,
+                "next_plugin": next_plugin,
+            })
 
         if self.telemetry:
             self.telemetry.emit(

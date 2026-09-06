@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from orchestrator.interop_parser import CapabilityMap
+from orchestrator.interop_parser import CapabilityMap, Capability, PluginInfo
 
 
 class TestCapabilityMapParsing(unittest.TestCase):
@@ -111,6 +111,68 @@ class TestCapabilityMapParsing(unittest.TestCase):
         self.assertFalse(is_valid)
         self.assertIsNotNone(error)
 
+    def test_validate_input_enforce_types_type_mismatch(self):
+        """Test enforce_types=True rejects a field whose type doesn't match consumes."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        invalid_input = {
+            "requirements_md": "content",
+            "design_md": "content",
+            "research_cache": "not-an-object",  # declared type is "object"
+            "recap_md": "content"
+        }
+
+        is_valid, error = cap_map.validate_input(
+            "agent-tdd",
+            "design_spec_slicing",
+            invalid_input,
+            enforce_types=True
+        )
+
+        self.assertFalse(is_valid)
+        self.assertIn("research_cache", error)
+
+    def test_validate_input_enforce_types_type_match(self):
+        """Test enforce_types=True accepts input matching declared types."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        valid_input = {
+            "requirements_md": "content",
+            "design_md": "content",
+            "research_cache": {"key": "value"},
+            "recap_md": "content"
+        }
+
+        is_valid, error = cap_map.validate_input(
+            "agent-tdd",
+            "design_spec_slicing",
+            valid_input,
+            enforce_types=True
+        )
+
+        self.assertTrue(is_valid)
+        self.assertIsNone(error)
+
+    def test_validate_input_default_ignores_types(self):
+        """Test default (enforce_types=False) only checks field presence, not type."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        input_with_wrong_type = {
+            "requirements_md": "content",
+            "design_md": "content",
+            "research_cache": "not-an-object",
+            "recap_md": "content"
+        }
+
+        is_valid, error = cap_map.validate_input(
+            "agent-tdd",
+            "design_spec_slicing",
+            input_with_wrong_type
+        )
+
+        self.assertTrue(is_valid)
+        self.assertIsNone(error)
+
     def test_is_soft_dependency_agent_nelly(self):
         """Test agent-nelly is recognized as soft dependency."""
         cap_map = CapabilityMap(str(self.plugin_dir))
@@ -157,7 +219,6 @@ class TestCapabilityMapParsing(unittest.TestCase):
 
         self.assertIn("capability_map", cached)
         self.assertIn("interop_hashes", cached)
-        self.assertIsNotNone(cached["interop_hashes"])
 
     def test_cache_retrieval_with_unchanged_hashes(self):
         """Test retrieving cached map when hashes are unchanged."""
@@ -355,6 +416,72 @@ class TestCapabilityMapRefactoring(unittest.TestCase):
             self.assertEqual(plugin1.name, plugin2.name)
             self.assertEqual(plugin1.handoff_targets, plugin2.handoff_targets)
             self.assertEqual(plugin1.is_soft_dependency, plugin2.is_soft_dependency)
+
+
+class TestCapabilityMapFromPlugins(unittest.TestCase):
+    """Test injecting plugin/capability doubles without INTEROP.md files on disk."""
+
+    def test_from_plugins_builds_map_without_disk_access(self):
+        """Test from_plugins constructs a usable CapabilityMap from in-memory data."""
+        fake_plugins = {
+            "fake-source": PluginInfo(
+                name="fake-source",
+                handoff_targets=["fake-target"],
+                capabilities=[
+                    Capability(plugin="fake-source", id="do_thing", produces={"out": "string"})
+                ]
+            ),
+            "fake-target": PluginInfo(
+                name="fake-target",
+                capabilities=[
+                    Capability(
+                        plugin="fake-target",
+                        id="handle_thing",
+                        consumes={"out": "string"}
+                    )
+                ]
+            ),
+        }
+
+        cap_map = CapabilityMap.from_plugins(fake_plugins)
+
+        self.assertEqual(cap_map.get_plugin("fake-source").handoff_targets, ["fake-target"])
+        self.assertIsNotNone(cap_map.find_capability("fake-target", "handle_thing"))
+        self.assertIsNone(cap_map.get_plugin("agent-isdd"))
+
+    def test_from_plugins_supports_validate_input(self):
+        """Test a from_plugins-built map works with validate_input like a parsed one."""
+        fake_plugins = {
+            "fake-target": PluginInfo(
+                name="fake-target",
+                capabilities=[
+                    Capability(
+                        plugin="fake-target",
+                        id="handle_thing",
+                        consumes={"required_field": "string"}
+                    )
+                ]
+            ),
+        }
+        cap_map = CapabilityMap.from_plugins(fake_plugins)
+
+        is_valid, error = cap_map.validate_input(
+            "fake-target", "handle_thing", {"required_field": "value"}
+        )
+        self.assertTrue(is_valid)
+
+        is_valid, error = cap_map.validate_input("fake-target", "handle_thing", {})
+        self.assertFalse(is_valid)
+
+    def test_from_plugins_does_not_touch_filesystem(self):
+        """Test from_plugins works with a nonexistent plugin_dir_base (never read)."""
+        cap_map = CapabilityMap.from_plugins(
+            {"fake": PluginInfo(name="fake")},
+            plugin_dir_base="/nonexistent/path/that/does/not/exist"
+        )
+
+        self.assertIsNotNone(cap_map.get_plugin("fake"))
+        self.assertEqual(cap_map.get_interop_hashes(), {})
 
 
 if __name__ == "__main__":

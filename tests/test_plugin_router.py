@@ -276,6 +276,98 @@ class TestPluginRouterHandoffValidation(unittest.TestCase):
             )
         self.assertIn("dict", str(context.exception))
 
+    def test_transform_payload_no_mapping_returns_copy(self):
+        """Test transform_payload with nothing registered returns an equal copy."""
+        payload = {"a": 1}
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing", payload
+        )
+
+        self.assertEqual(result, payload)
+        self.assertIsNot(result, payload)
+
+    def test_payload_mapping_renames_fields(self):
+        """Test set_payload_mapping renames source fields to target field names."""
+        self.router.set_payload_mapping(
+            "agent-isdd", "agent-tdd", {"spec_md": "design_md"}
+        )
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing",
+            {"spec_md": "content"}
+        )
+
+        self.assertEqual(result, {"design_md": "content"})
+
+    def test_payload_mapping_enables_handoff_that_would_otherwise_fail(self):
+        """Test a registered mapping lets validate_handoff succeed on renamed fields."""
+        self.router.set_payload_mapping(
+            "agent-isdd", "agent-tdd", {"spec_md": "design_md"}
+        )
+        payload = {
+            "requirements_md": "content",
+            "spec_md": "content",  # would fail without mapping to design_md
+            "research_cache": {"data": "value"},
+            "recap_md": "content"
+        }
+
+        is_valid, error = self.router.validate_handoff(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing", payload
+        )
+
+        self.assertTrue(is_valid)
+        self.assertIsNone(error)
+        # Original payload dict passed in is untouched.
+        self.assertIn("spec_md", payload)
+        self.assertNotIn("design_md", payload)
+
+    def test_clear_payload_mapping_restores_default(self):
+        """Test clear_payload_mapping removes a previously registered mapping."""
+        self.router.set_payload_mapping(
+            "agent-isdd", "agent-tdd", {"spec_md": "design_md"}
+        )
+        self.router.clear_payload_mapping("agent-isdd", "agent-tdd")
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing",
+            {"spec_md": "content"}
+        )
+
+        self.assertEqual(result, {"spec_md": "content"})
+
+    def test_payload_transformer_runs_after_mapping(self):
+        """Test set_payload_transformer applies a custom callable after field mapping."""
+        self.router.set_payload_mapping(
+            "agent-isdd", "agent-tdd", {"spec_md": "design_md"}
+        )
+        self.router.set_payload_transformer(
+            lambda source, source_cap, target, target_cap, payload: {
+                **payload, "design_md": payload["design_md"].upper()
+            }
+        )
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing",
+            {"spec_md": "content"}
+        )
+
+        self.assertEqual(result, {"design_md": "CONTENT"})
+
+    def test_clear_payload_transformer(self):
+        """Test clear_payload_transformer removes the custom transformer."""
+        self.router.set_payload_transformer(
+            lambda source, source_cap, target, target_cap, payload: {"replaced": True}
+        )
+        self.router.clear_payload_transformer()
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing",
+            {"a": 1}
+        )
+
+        self.assertEqual(result, {"a": 1})
+
 
 class TestPluginRouterSequencing(unittest.TestCase):
     """Test route_to_next_plugin workflow sequencing."""
@@ -346,6 +438,88 @@ class TestPluginRouterSequencing(unittest.TestCase):
 
         self.assertIsNone(next_plugin)
 
+    def test_routing_policy_overrides_table(self):
+        """Test a custom routing policy takes precedence over ROUTING_TABLE."""
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: "agent-ux"
+        )
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd",
+            "design_approved",
+            handoff_valid=True
+        )
+
+        self.assertEqual(next_plugin, "agent-ux")
+
+    def test_routing_policy_receives_workflow_state(self):
+        """Test the routing policy is called with plugin, phase, and workflow_state."""
+        seen = {}
+
+        def policy(plugin, phase, workflow_state):
+            seen["args"] = (plugin, phase, workflow_state)
+            return None
+
+        self.router.set_routing_policy(policy)
+        state = {"foo": "bar"}
+
+        self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True, workflow_state=state
+        )
+
+        self.assertEqual(seen["args"], ("agent-isdd", "design_approved", state))
+
+    def test_routing_policy_deferring_falls_back_to_table(self):
+        """Test PluginRouter.USE_DEFAULT_ROUTE lets the policy defer to ROUTING_TABLE."""
+        from orchestrator.core import PluginRouter
+
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: PluginRouter.USE_DEFAULT_ROUTE
+        )
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True
+        )
+
+        self.assertEqual(next_plugin, "agent-tdd")
+
+    def test_routing_policy_none_ends_workflow(self):
+        """Test a policy explicitly returning None ends the workflow, no fallback."""
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: None
+        )
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True
+        )
+
+        self.assertIsNone(next_plugin)
+
+    def test_invalid_handoff_skips_routing_policy(self):
+        """Test an invalid handoff still halts the workflow even with a policy set."""
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: "agent-ux"
+        )
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=False
+        )
+
+        self.assertIsNone(next_plugin)
+
+    def test_clear_routing_policy_restores_table_behavior(self):
+        """Test clear_routing_policy removes a previously set policy."""
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: "agent-ux"
+        )
+        self.router.clear_routing_policy()
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True
+        )
+
+        self.assertEqual(next_plugin, "agent-tdd")
+
 
 class TestPluginRouterCheckpointing(unittest.TestCase):
     """Test route_to_next_plugin auto-checkpointing via CheckpointManager."""
@@ -408,6 +582,41 @@ class TestPluginRouterCheckpointing(unittest.TestCase):
         )
 
         self.assertEqual(next_plugin, "agent-tdd")
+
+    def test_valid_handoff_recorded_in_handoff_history(self):
+        """Routing to a next plugin is recorded in the handoff history log."""
+        self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True,
+            workflow_state=self.workflow_state, checkpoint_manager=self.checkpoint_manager
+        )
+
+        history = self.checkpoint_manager.get_handoff_history(self.workflow_state)
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["next_plugin"], "agent-tdd")
+        self.assertTrue(history[0]["handoff_valid"])
+
+    def test_invalid_handoff_recorded_in_handoff_history(self):
+        """An invalid handoff is recorded in history even though no checkpoint is made."""
+        self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=False,
+            workflow_state=self.workflow_state, checkpoint_manager=self.checkpoint_manager
+        )
+
+        history = self.checkpoint_manager.get_handoff_history(self.workflow_state)
+        self.assertEqual(len(history), 1)
+        self.assertFalse(history[0]["handoff_valid"])
+        self.assertIsNone(history[0]["next_plugin"])
+
+    def test_end_of_workflow_recorded_in_handoff_history(self):
+        """Reaching the end of the workflow (no checkpoint) is still recorded."""
+        self.router.route_to_next_plugin(
+            "code-reviewer", "review_complete", handoff_valid=True,
+            workflow_state=self.workflow_state, checkpoint_manager=self.checkpoint_manager
+        )
+
+        history = self.checkpoint_manager.get_handoff_history(self.workflow_state)
+        self.assertEqual(len(history), 1)
+        self.assertIsNone(history[0]["next_plugin"])
 
 
 if __name__ == "__main__":

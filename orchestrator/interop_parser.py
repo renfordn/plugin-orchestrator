@@ -1,5 +1,6 @@
 """CapabilityMap: Parse INTEROP.md files and build capability registry."""
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -10,6 +11,34 @@ from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
+
+# JSON Schema type name -> accepted Python types. bool is checked before int
+# since bool is a subclass of int in Python.
+_JSON_SCHEMA_TYPES: Dict[str, tuple] = {
+    "string": (str,),
+    "object": (dict,),
+    "array": (list, tuple),
+    "boolean": (bool,),
+    "integer": (int,),
+    "number": (int, float),
+    "null": (type(None),),
+}
+
+
+def _matches_json_type(value, expected_type: str) -> bool:
+    """Check whether value's runtime type matches a JSON Schema type name.
+
+    Unknown type names are accepted (fail open) so undeclared/custom type
+    strings in a consumes contract don't turn into false rejections.
+    """
+    python_types = _JSON_SCHEMA_TYPES.get(expected_type)
+    if python_types is None:
+        return True
+
+    if expected_type != "boolean" and isinstance(value, bool):
+        return False
+
+    return isinstance(value, python_types)
 
 
 @dataclass
@@ -70,6 +99,38 @@ class CapabilityMap:
         self.interop_hashes: Dict[str, str] = {}
 
         self._parse_all_plugins()
+
+    @classmethod
+    def from_plugins(
+        cls,
+        plugins: Dict[str, PluginInfo],
+        plugin_dir_base: Optional[str] = None
+    ) -> 'CapabilityMap':
+        """Build a CapabilityMap from in-memory PluginInfo/Capability doubles.
+
+        Bypasses INTEROP.md discovery and parsing entirely, so tests can
+        inject fake plugins/capabilities without fixture files on disk. All
+        other CapabilityMap behavior (get_plugin, find_capability,
+        validate_input, route_to_next_plugin, refresh, caching) works
+        identically on the result.
+
+        Args:
+            plugins: Dict mapping plugin name to a fully-built PluginInfo.
+            plugin_dir_base: Optional base directory recorded on the instance
+                (used only by refresh()/save_to_cache(), which re-read from
+                disk; irrelevant if the map is never refreshed). Defaults to
+                the same fixtures fallback as __init__.
+
+        Returns:
+            A CapabilityMap populated with exactly the given plugins.
+        """
+        instance = cls.__new__(cls)
+        if plugin_dir_base is None:
+            plugin_dir_base = Path(__file__).parent.parent / "tests" / "fixtures"
+        instance.plugin_dir_base = Path(plugin_dir_base)
+        instance.plugins = dict(plugins)
+        instance.interop_hashes = {}
+        return instance
 
     def _parse_all_plugins(self) -> None:
         """Parse all INTEROP.md files and build registry.
@@ -290,7 +351,8 @@ class CapabilityMap:
         self,
         plugin_name: str,
         capability_id: str,
-        input_shape: dict
+        input_shape: dict,
+        enforce_types: bool = False
     ) -> Tuple[bool, Optional[str]]:
         """
         Validate input matches capability's consumes contract.
@@ -299,6 +361,10 @@ class CapabilityMap:
             plugin_name: Name of the plugin
             capability_id: ID of the capability
             input_shape: Input data to validate
+            enforce_types: If True, also check each field's JSON Schema type
+                (string/object/array/number/integer/boolean/null) against the
+                declared type in the consumes contract. Defaults to False to
+                preserve the historical field-presence-only behavior.
 
         Returns:
             Tuple of (is_valid, error_reason)
@@ -312,11 +378,46 @@ class CapabilityMap:
             return True, None
 
         # Validate required fields from consumes contract
-        for field_name in capability.consumes:
+        for field_name, expected_type in capability.consumes.items():
             if field_name not in input_shape:
                 return False, f"Missing required field: {field_name}"
 
+            if enforce_types and not _matches_json_type(input_shape[field_name], expected_type):
+                actual_type = type(input_shape[field_name]).__name__
+                return False, (
+                    f"Field '{field_name}' expected type '{expected_type}' "
+                    f"but got '{actual_type}'"
+                )
+
         return True, None
+
+    async def validate_input_async(
+        self,
+        plugin_name: str,
+        capability_id: str,
+        input_shape: dict,
+        enforce_types: bool = False
+    ) -> Tuple[bool, Optional[str]]:
+        """Async wrapper for validate_input, for high-concurrency callers.
+
+        Validation is CPU-bound and sub-millisecond, so this offers no
+        speedup on its own; its purpose is letting many independent
+        validations run concurrently (e.g. via asyncio.gather) from an
+        asyncio-based caller without blocking the event loop on each one,
+        by offloading each call to a worker thread.
+
+        Args:
+            plugin_name: Name of the plugin
+            capability_id: ID of the capability
+            input_shape: Input data to validate
+            enforce_types: Forwarded to validate_input (see its docstring)
+
+        Returns:
+            Tuple of (is_valid, error_reason)
+        """
+        return await asyncio.to_thread(
+            self.validate_input, plugin_name, capability_id, input_shape, enforce_types
+        )
 
     def is_soft_dependency(self, plugin_name: str) -> bool:
         """

@@ -365,5 +365,50 @@ class TestCheckpointManagerPruning(unittest.TestCase):
         )
 
 
+class TestCheckpointManagerHandoffHistory(unittest.TestCase):
+    """Test record_handoff() / get_handoff_history() workflow history log."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.manager = CheckpointManager()
+        self.workflow_state = {}
+
+    def test_record_handoff_appends_entry_with_timestamp(self):
+        """Test record_handoff stores the entry with an added timestamp."""
+        self.manager.record_handoff(
+            self.workflow_state,
+            {"current_plugin": "agent-isdd", "current_phase": "design_approved",
+             "handoff_valid": True, "next_plugin": "agent-tdd"}
+        )
+
+        history = self.workflow_state["orchestration"]["handoff_history"]
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["current_plugin"], "agent-isdd")
+        self.assertIn("timestamp", history[0])
+
+    def test_get_handoff_history_empty_when_none_recorded(self):
+        """Test get_handoff_history returns [] when nothing has been recorded."""
+        self.assertEqual(self.manager.get_handoff_history(self.workflow_state), [])
+
+    def test_get_handoff_history_most_recent_first(self):
+        """Test get_handoff_history returns entries in reverse chronological order."""
+        self.manager.record_handoff(self.workflow_state, {"next_plugin": "agent-tdd"})
+        self.manager.record_handoff(self.workflow_state, {"next_plugin": "code-reviewer"})
+
+        history = self.manager.get_handoff_history(self.workflow_state)
+
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0]["next_plugin"], "code-reviewer")
+        self.assertEqual(history[1]["next_plugin"], "agent-tdd")
+
+    def test_record_handoff_coexists_with_checkpoints(self):
+        """Test handoff history and checkpoints are stored independently under orchestration."""
+        self.manager.create_checkpoint(self.workflow_state, "before_agent-tdd_spawn")
+        self.manager.record_handoff(self.workflow_state, {"next_plugin": "agent-tdd"})
+
+        self.assertEqual(len(self.manager.get_checkpoint_history(self.workflow_state)), 1)
+        self.assertEqual(len(self.manager.get_handoff_history(self.workflow_state)), 1)
+
+
 if __name__ == '__main__':
     unittest.main()
