@@ -276,6 +276,98 @@ class TestPluginRouterHandoffValidation(unittest.TestCase):
             )
         self.assertIn("dict", str(context.exception))
 
+    def test_transform_payload_no_mapping_returns_copy(self):
+        """Test transform_payload with nothing registered returns an equal copy."""
+        payload = {"a": 1}
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing", payload
+        )
+
+        self.assertEqual(result, payload)
+        self.assertIsNot(result, payload)
+
+    def test_payload_mapping_renames_fields(self):
+        """Test set_payload_mapping renames source fields to target field names."""
+        self.router.set_payload_mapping(
+            "agent-isdd", "agent-tdd", {"spec_md": "design_md"}
+        )
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing",
+            {"spec_md": "content"}
+        )
+
+        self.assertEqual(result, {"design_md": "content"})
+
+    def test_payload_mapping_enables_handoff_that_would_otherwise_fail(self):
+        """Test a registered mapping lets validate_handoff succeed on renamed fields."""
+        self.router.set_payload_mapping(
+            "agent-isdd", "agent-tdd", {"spec_md": "design_md"}
+        )
+        payload = {
+            "requirements_md": "content",
+            "spec_md": "content",  # would fail without mapping to design_md
+            "research_cache": {"data": "value"},
+            "recap_md": "content"
+        }
+
+        is_valid, error = self.router.validate_handoff(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing", payload
+        )
+
+        self.assertTrue(is_valid)
+        self.assertIsNone(error)
+        # Original payload dict passed in is untouched.
+        self.assertIn("spec_md", payload)
+        self.assertNotIn("design_md", payload)
+
+    def test_clear_payload_mapping_restores_default(self):
+        """Test clear_payload_mapping removes a previously registered mapping."""
+        self.router.set_payload_mapping(
+            "agent-isdd", "agent-tdd", {"spec_md": "design_md"}
+        )
+        self.router.clear_payload_mapping("agent-isdd", "agent-tdd")
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing",
+            {"spec_md": "content"}
+        )
+
+        self.assertEqual(result, {"spec_md": "content"})
+
+    def test_payload_transformer_runs_after_mapping(self):
+        """Test set_payload_transformer applies a custom callable after field mapping."""
+        self.router.set_payload_mapping(
+            "agent-isdd", "agent-tdd", {"spec_md": "design_md"}
+        )
+        self.router.set_payload_transformer(
+            lambda source, source_cap, target, target_cap, payload: {
+                **payload, "design_md": payload["design_md"].upper()
+            }
+        )
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing",
+            {"spec_md": "content"}
+        )
+
+        self.assertEqual(result, {"design_md": "CONTENT"})
+
+    def test_clear_payload_transformer(self):
+        """Test clear_payload_transformer removes the custom transformer."""
+        self.router.set_payload_transformer(
+            lambda source, source_cap, target, target_cap, payload: {"replaced": True}
+        )
+        self.router.clear_payload_transformer()
+
+        result = self.router.transform_payload(
+            "agent-isdd", "design_spec_handoff", "agent-tdd", "design_spec_slicing",
+            {"a": 1}
+        )
+
+        self.assertEqual(result, {"a": 1})
+
 
 class TestPluginRouterSequencing(unittest.TestCase):
     """Test route_to_next_plugin workflow sequencing."""

@@ -82,6 +82,73 @@ class PluginRouter:
             routing_table_path or DEFAULT_ROUTING_TABLE_PATH
         )
         self._routing_policy = None
+        self._payload_mappings = {}
+        self._payload_transformer = None
+
+    def set_payload_mapping(self, source_plugin: str, target_plugin: str, mapping: dict) -> None:
+        """Register a field-rename mapping applied to (source_plugin -> target_plugin) payloads.
+
+        Args:
+            source_plugin: Name of the sending plugin.
+            target_plugin: Name of the receiving plugin.
+            mapping: Dict of {source_field_name: target_field_name}. Renamed
+                during transform_payload()/validate_handoff() so a source's
+                output field names can satisfy a target's differently-named
+                consumes contract without either plugin knowing about the other.
+        """
+        self._payload_mappings[(source_plugin, target_plugin)] = mapping
+
+    def clear_payload_mapping(self, source_plugin: str, target_plugin: str) -> None:
+        """Remove a previously registered field-rename mapping, if any."""
+        self._payload_mappings.pop((source_plugin, target_plugin), None)
+
+    def set_payload_transformer(self, transformer) -> None:
+        """Register a custom payload transformer, applied after field mapping.
+
+        Args:
+            transformer: Callable(source_plugin, source_capability_id,
+                target_plugin, target_capability_id, payload) -> dict. Runs
+                after any registered field-rename mapping, for transformations
+                a simple rename can't express (reshaping, defaults, derived
+                fields).
+        """
+        self._payload_transformer = transformer
+
+    def clear_payload_transformer(self) -> None:
+        """Remove any custom payload transformer."""
+        self._payload_transformer = None
+
+    def transform_payload(
+        self,
+        source_plugin: str,
+        source_capability_id: str,
+        target_plugin: str,
+        target_capability_id: str,
+        payload: dict
+    ) -> dict:
+        """Apply registered field mapping and transformer to a handoff payload.
+
+        Never mutates the input payload. With nothing registered, returns a
+        shallow copy unchanged.
+
+        Returns:
+            A new dict: payload with (source_plugin, target_plugin)'s field
+            mapping applied, then the custom transformer if one is set.
+        """
+        result = dict(payload)
+
+        mapping = self._payload_mappings.get((source_plugin, target_plugin))
+        if mapping:
+            for src_field, dst_field in mapping.items():
+                if src_field in result:
+                    result[dst_field] = result.pop(src_field)
+
+        if self._payload_transformer is not None:
+            result = self._payload_transformer(
+                source_plugin, source_capability_id, target_plugin, target_capability_id, result
+            )
+
+        return result
 
     def set_routing_policy(self, policy) -> None:
         """Register a custom routing policy, overriding ROUTING_TABLE lookups.
@@ -240,7 +307,9 @@ class PluginRouter:
         Validates that:
         1. Source plugin declares the source_capability_id
         2. Target plugin declares the target_capability_id
-        3. Payload contains all required fields from target's consumes contract
+        3. Payload, after any registered field mapping/transformer (see
+           set_payload_mapping/set_payload_transformer), contains all required
+           fields from target's consumes contract
 
         This ensures plugin-to-plugin handoffs match contractual expectations
         defined in INTEROP.md files (parsed by CapabilityMap).
@@ -343,8 +412,15 @@ class PluginRouter:
                 f"Target capability '{target_capability_id}' not found in {target_plugin}"
             )
 
+        # Apply any registered field mapping/transformer before contract
+        # validation, so renamed/reshaped fields still satisfy the target's
+        # consumes contract.
+        transformed_payload = self.transform_payload(
+            source_plugin, source_capability_id, target_plugin, target_capability_id, payload
+        )
+
         # Validate payload matches target's consumes contract
-        is_valid, error = self._validate_payload_contract(target_cap, payload)
+        is_valid, error = self._validate_payload_contract(target_cap, transformed_payload)
         if not is_valid:
             return False, error
 
