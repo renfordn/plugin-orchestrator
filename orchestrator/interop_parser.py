@@ -99,6 +99,38 @@ class CapabilityMap:
 
         self._parse_all_plugins()
 
+    @classmethod
+    def from_plugins(
+        cls,
+        plugins: Dict[str, PluginInfo],
+        plugin_dir_base: Optional[str] = None
+    ) -> 'CapabilityMap':
+        """Build a CapabilityMap from in-memory PluginInfo/Capability doubles.
+
+        Bypasses INTEROP.md discovery and parsing entirely, so tests can
+        inject fake plugins/capabilities without fixture files on disk. All
+        other CapabilityMap behavior (get_plugin, find_capability,
+        validate_input, route_to_next_plugin, refresh, caching) works
+        identically on the result.
+
+        Args:
+            plugins: Dict mapping plugin name to a fully-built PluginInfo.
+            plugin_dir_base: Optional base directory recorded on the instance
+                (used only by refresh()/save_to_cache(), which re-read from
+                disk; irrelevant if the map is never refreshed). Defaults to
+                the same fixtures fallback as __init__.
+
+        Returns:
+            A CapabilityMap populated with exactly the given plugins.
+        """
+        instance = cls.__new__(cls)
+        if plugin_dir_base is None:
+            plugin_dir_base = Path(__file__).parent.parent / "tests" / "fixtures"
+        instance.plugin_dir_base = Path(plugin_dir_base)
+        instance.plugins = dict(plugins)
+        instance.interop_hashes = {}
+        return instance
+
     def _parse_all_plugins(self) -> None:
         """Parse all INTEROP.md files and build registry.
 
