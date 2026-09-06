@@ -111,6 +111,68 @@ class TestCapabilityMapParsing(unittest.TestCase):
         self.assertFalse(is_valid)
         self.assertIsNotNone(error)
 
+    def test_validate_input_enforce_types_type_mismatch(self):
+        """Test enforce_types=True rejects a field whose type doesn't match consumes."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        invalid_input = {
+            "requirements_md": "content",
+            "design_md": "content",
+            "research_cache": "not-an-object",  # declared type is "object"
+            "recap_md": "content"
+        }
+
+        is_valid, error = cap_map.validate_input(
+            "agent-tdd",
+            "design_spec_slicing",
+            invalid_input,
+            enforce_types=True
+        )
+
+        self.assertFalse(is_valid)
+        self.assertIn("research_cache", error)
+
+    def test_validate_input_enforce_types_type_match(self):
+        """Test enforce_types=True accepts input matching declared types."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        valid_input = {
+            "requirements_md": "content",
+            "design_md": "content",
+            "research_cache": {"key": "value"},
+            "recap_md": "content"
+        }
+
+        is_valid, error = cap_map.validate_input(
+            "agent-tdd",
+            "design_spec_slicing",
+            valid_input,
+            enforce_types=True
+        )
+
+        self.assertTrue(is_valid)
+        self.assertIsNone(error)
+
+    def test_validate_input_default_ignores_types(self):
+        """Test default (enforce_types=False) only checks field presence, not type."""
+        cap_map = CapabilityMap(str(self.plugin_dir))
+
+        input_with_wrong_type = {
+            "requirements_md": "content",
+            "design_md": "content",
+            "research_cache": "not-an-object",
+            "recap_md": "content"
+        }
+
+        is_valid, error = cap_map.validate_input(
+            "agent-tdd",
+            "design_spec_slicing",
+            input_with_wrong_type
+        )
+
+        self.assertTrue(is_valid)
+        self.assertIsNone(error)
+
     def test_is_soft_dependency_agent_nelly(self):
         """Test agent-nelly is recognized as soft dependency."""
         cap_map = CapabilityMap(str(self.plugin_dir))

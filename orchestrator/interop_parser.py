@@ -11,6 +11,34 @@ from typing import Optional, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
+# JSON Schema type name -> accepted Python types. bool is checked before int
+# since bool is a subclass of int in Python.
+_JSON_SCHEMA_TYPES: Dict[str, tuple] = {
+    "string": (str,),
+    "object": (dict,),
+    "array": (list, tuple),
+    "boolean": (bool,),
+    "integer": (int,),
+    "number": (int, float),
+    "null": (type(None),),
+}
+
+
+def _matches_json_type(value, expected_type: str) -> bool:
+    """Check whether value's runtime type matches a JSON Schema type name.
+
+    Unknown type names are accepted (fail open) so undeclared/custom type
+    strings in a consumes contract don't turn into false rejections.
+    """
+    python_types = _JSON_SCHEMA_TYPES.get(expected_type)
+    if python_types is None:
+        return True
+
+    if expected_type != "boolean" and isinstance(value, bool):
+        return False
+
+    return isinstance(value, python_types)
+
 
 @dataclass
 class Capability:
@@ -290,7 +318,8 @@ class CapabilityMap:
         self,
         plugin_name: str,
         capability_id: str,
-        input_shape: dict
+        input_shape: dict,
+        enforce_types: bool = False
     ) -> Tuple[bool, Optional[str]]:
         """
         Validate input matches capability's consumes contract.
@@ -299,6 +328,10 @@ class CapabilityMap:
             plugin_name: Name of the plugin
             capability_id: ID of the capability
             input_shape: Input data to validate
+            enforce_types: If True, also check each field's JSON Schema type
+                (string/object/array/number/integer/boolean/null) against the
+                declared type in the consumes contract. Defaults to False to
+                preserve the historical field-presence-only behavior.
 
         Returns:
             Tuple of (is_valid, error_reason)
@@ -312,9 +345,16 @@ class CapabilityMap:
             return True, None
 
         # Validate required fields from consumes contract
-        for field_name in capability.consumes:
+        for field_name, expected_type in capability.consumes.items():
             if field_name not in input_shape:
                 return False, f"Missing required field: {field_name}"
+
+            if enforce_types and not _matches_json_type(input_shape[field_name], expected_type):
+                actual_type = type(input_shape[field_name]).__name__
+                return False, (
+                    f"Field '{field_name}' expected type '{expected_type}' "
+                    f"but got '{actual_type}'"
+                )
 
         return True, None
 
