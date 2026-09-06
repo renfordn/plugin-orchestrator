@@ -1,5 +1,6 @@
 """CapabilityMap: Parse INTEROP.md files and build capability registry."""
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -389,6 +390,34 @@ class CapabilityMap:
                 )
 
         return True, None
+
+    async def validate_input_async(
+        self,
+        plugin_name: str,
+        capability_id: str,
+        input_shape: dict,
+        enforce_types: bool = False
+    ) -> Tuple[bool, Optional[str]]:
+        """Async wrapper for validate_input, for high-concurrency callers.
+
+        Validation is CPU-bound and sub-millisecond, so this offers no
+        speedup on its own; its purpose is letting many independent
+        validations run concurrently (e.g. via asyncio.gather) from an
+        asyncio-based caller without blocking the event loop on each one,
+        by offloading each call to a worker thread.
+
+        Args:
+            plugin_name: Name of the plugin
+            capability_id: ID of the capability
+            input_shape: Input data to validate
+            enforce_types: Forwarded to validate_input (see its docstring)
+
+        Returns:
+            Tuple of (is_valid, error_reason)
+        """
+        return await asyncio.to_thread(
+            self.validate_input, plugin_name, capability_id, input_shape, enforce_types
+        )
 
     def is_soft_dependency(self, plugin_name: str) -> bool:
         """

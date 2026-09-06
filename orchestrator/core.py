@@ -17,6 +17,7 @@ Example workflow sequence:
 If any handoff fails validation, the workflow pauses (returns None).
 """
 
+import asyncio
 import json
 import time
 import warnings
@@ -376,6 +377,41 @@ class PluginRouter:
             )
 
         return result
+
+    async def validate_handoff_async(
+        self,
+        source_plugin: str,
+        source_capability_id: str,
+        target_plugin: str,
+        target_capability_id: str,
+        payload: dict
+    ) -> Tuple[bool, Optional[str]]:
+        """Async wrapper for validate_handoff, for high-concurrency workflows.
+
+        Validation is CPU-bound and sub-millisecond, so this offers no
+        speedup on its own; its purpose is letting many independent handoffs
+        be validated concurrently (e.g. via asyncio.gather) from an
+        asyncio-based orchestrator without blocking the event loop on each
+        one, by offloading each call to a worker thread. Semantics (including
+        raised exceptions and telemetry emission) are identical to
+        validate_handoff.
+
+        Args:
+            source_plugin: Name of sending plugin.
+            source_capability_id: Capability ID from source.
+            target_plugin: Name of receiving plugin.
+            target_capability_id: Capability ID expected by target.
+            payload: Handoff data (dict).
+
+        Returns:
+            Tuple of (is_valid, error_reason), same as validate_handoff.
+        """
+        return await asyncio.to_thread(
+            self.validate_handoff,
+            source_plugin, source_capability_id,
+            target_plugin, target_capability_id,
+            payload
+        )
 
     def _validate_handoff_uncounted(
         self,
