@@ -16,6 +16,7 @@ import json
 import os
 import tempfile
 from abc import ABC, abstractmethod
+from typing import Optional
 
 try:
     import fcntl
@@ -112,23 +113,51 @@ class RedisStateStore(WorkflowStateStore):
     import this class if you're using it). Each workflow is stored as a JSON
     string under a namespaced key so unrelated data in the same Redis instance
     isn't touched.
+
+    Connection settings fall back to environment variables when not passed
+    explicitly, so a deployment can configure Redis once (env) rather than at
+    every call site:
+
+    - REDIS_HOST     -> host
+    - REDIS_PORT     -> port (int)
+    - REDIS_DB       -> db (int)
+    - REDIS_PASSWORD -> password
+    - REDIS_KEY_PREFIX -> key_prefix
+
+    An explicit constructor argument always wins over its environment
+    variable, and either can be overridden per Redis kwarg (e.g. passing
+    host= alone still picks up REDIS_PORT/REDIS_DB from the environment).
     """
 
-    def __init__(self, redis_client=None, key_prefix: str = "orchestrator:workflow:", **redis_kwargs):
+    _ENV_KWARGS = {
+        "REDIS_HOST": ("host", str),
+        "REDIS_PORT": ("port", int),
+        "REDIS_DB": ("db", int),
+        "REDIS_PASSWORD": ("password", str),
+    }
+
+    def __init__(self, redis_client=None, key_prefix: Optional[str] = None, **redis_kwargs):
         """
         Args:
             redis_client: An existing redis.Redis (or compatible) client to
                 reuse, e.g. for connection pooling or a fake client in tests.
-                If omitted, one is created from redis_kwargs.
-            key_prefix: Prefix applied to every workflow's Redis key.
+                If omitted, one is created from redis_kwargs (merged with
+                REDIS_* environment variables; see class docstring).
+            key_prefix: Prefix applied to every workflow's Redis key. Defaults
+                to REDIS_KEY_PREFIX if set, else "orchestrator:workflow:".
             **redis_kwargs: Passed to redis.Redis(...) when redis_client is
-                not given (e.g. host, port, db, password).
+                not given (e.g. host, port, db, password). Any left unset
+                fall back to the matching REDIS_* environment variable.
 
         Raises:
             ImportError: If the `redis` package is not installed and no
                 redis_client was supplied.
         """
-        self.key_prefix = key_prefix
+        self.key_prefix = (
+            key_prefix
+            if key_prefix is not None
+            else os.environ.get("REDIS_KEY_PREFIX", "orchestrator:workflow:")
+        )
         if redis_client is not None:
             self._client = redis_client
         else:
@@ -139,7 +168,20 @@ class RedisStateStore(WorkflowStateStore):
                     "RedisStateStore requires the 'redis' package. "
                     "Install it with: pip install redis"
                 ) from e
-            self._client = redis.Redis(**redis_kwargs)
+
+            merged_kwargs = dict(self._env_redis_kwargs())
+            merged_kwargs.update(redis_kwargs)
+            self._client = redis.Redis(**merged_kwargs)
+
+    @classmethod
+    def _env_redis_kwargs(cls) -> dict:
+        """Build redis.Redis kwargs from REDIS_* environment variables."""
+        kwargs = {}
+        for env_var, (kwarg_name, cast) in cls._ENV_KWARGS.items():
+            value = os.environ.get(env_var)
+            if value is not None:
+                kwargs[kwarg_name] = cast(value)
+        return kwargs
 
     def _key(self, workflow_id: str) -> str:
         return f"{self.key_prefix}{workflow_id}"
