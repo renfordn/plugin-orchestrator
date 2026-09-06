@@ -48,6 +48,10 @@ class PluginRouter:
     # Soft dependencies: optional (log if unavailable, continue)
     SOFT_DEPENDENCIES = {"agent-nelly", "agent-ux", "agent-cache-plugin"}
 
+    # Sentinel a routing policy returns to defer to ROUTING_TABLE for this
+    # decision, distinguishing "no opinion" from "end the workflow" (None).
+    USE_DEFAULT_ROUTE = object()
+
     def __init__(
         self,
         capability_map: CapabilityMap,
@@ -77,6 +81,23 @@ class PluginRouter:
         self.ROUTING_TABLE = self._load_routing_table(
             routing_table_path or DEFAULT_ROUTING_TABLE_PATH
         )
+        self._routing_policy = None
+
+    def set_routing_policy(self, policy) -> None:
+        """Register a custom routing policy, overriding ROUTING_TABLE lookups.
+
+        Args:
+            policy: Callable(current_plugin, current_phase, workflow_state) ->
+                Optional[str]. Called on every valid handoff before consulting
+                ROUTING_TABLE. Return a plugin name to route there, None to end
+                the workflow, or PluginRouter.USE_DEFAULT_ROUTE to defer to the
+                static ROUTING_TABLE for that decision.
+        """
+        self._routing_policy = policy
+
+    def clear_routing_policy(self) -> None:
+        """Remove any custom routing policy, restoring pure ROUTING_TABLE routing."""
+        self._routing_policy = None
 
     def _load_routing_table(self, path) -> dict:
         """Load (plugin, phase) -> next_plugin routes from a JSON config file.
@@ -342,6 +363,10 @@ class PluginRouter:
         Routes execution based on current plugin and phase. If the preceding
         handoff was invalid, returns None to halt the workflow.
 
+        If a routing policy is registered via set_routing_policy(), it is
+        consulted first; ROUTING_TABLE is only used when no policy is set or
+        the policy returns PluginRouter.USE_DEFAULT_ROUTE.
+
         Defined routes (from ROUTING_TABLE):
         - agent-isdd + design_approved → agent-tdd
         - agent-tdd + red_green_refactor_complete → code-reviewer
@@ -378,9 +403,14 @@ class PluginRouter:
         if not handoff_valid:
             return None
 
-        # Look up routing table: (plugin, phase) -> next_plugin
-        route_key = (current_plugin, current_phase)
-        next_plugin = self.ROUTING_TABLE.get(route_key)
+        next_plugin = self.USE_DEFAULT_ROUTE
+        if self._routing_policy is not None:
+            next_plugin = self._routing_policy(current_plugin, current_phase, workflow_state)
+
+        if next_plugin is self.USE_DEFAULT_ROUTE:
+            # Look up routing table: (plugin, phase) -> next_plugin
+            route_key = (current_plugin, current_phase)
+            next_plugin = self.ROUTING_TABLE.get(route_key)
 
         if next_plugin is not None and workflow_state is not None and checkpoint_manager is not None:
             checkpoint_manager.create_checkpoint(workflow_state, f"before_{next_plugin}_spawn")

@@ -346,6 +346,88 @@ class TestPluginRouterSequencing(unittest.TestCase):
 
         self.assertIsNone(next_plugin)
 
+    def test_routing_policy_overrides_table(self):
+        """Test a custom routing policy takes precedence over ROUTING_TABLE."""
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: "agent-ux"
+        )
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd",
+            "design_approved",
+            handoff_valid=True
+        )
+
+        self.assertEqual(next_plugin, "agent-ux")
+
+    def test_routing_policy_receives_workflow_state(self):
+        """Test the routing policy is called with plugin, phase, and workflow_state."""
+        seen = {}
+
+        def policy(plugin, phase, workflow_state):
+            seen["args"] = (plugin, phase, workflow_state)
+            return None
+
+        self.router.set_routing_policy(policy)
+        state = {"foo": "bar"}
+
+        self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True, workflow_state=state
+        )
+
+        self.assertEqual(seen["args"], ("agent-isdd", "design_approved", state))
+
+    def test_routing_policy_deferring_falls_back_to_table(self):
+        """Test PluginRouter.USE_DEFAULT_ROUTE lets the policy defer to ROUTING_TABLE."""
+        from orchestrator.core import PluginRouter
+
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: PluginRouter.USE_DEFAULT_ROUTE
+        )
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True
+        )
+
+        self.assertEqual(next_plugin, "agent-tdd")
+
+    def test_routing_policy_none_ends_workflow(self):
+        """Test a policy explicitly returning None ends the workflow, no fallback."""
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: None
+        )
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True
+        )
+
+        self.assertIsNone(next_plugin)
+
+    def test_invalid_handoff_skips_routing_policy(self):
+        """Test an invalid handoff still halts the workflow even with a policy set."""
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: "agent-ux"
+        )
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=False
+        )
+
+        self.assertIsNone(next_plugin)
+
+    def test_clear_routing_policy_restores_table_behavior(self):
+        """Test clear_routing_policy removes a previously set policy."""
+        self.router.set_routing_policy(
+            lambda plugin, phase, workflow_state: "agent-ux"
+        )
+        self.router.clear_routing_policy()
+
+        next_plugin = self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True
+        )
+
+        self.assertEqual(next_plugin, "agent-tdd")
+
 
 class TestPluginRouterCheckpointing(unittest.TestCase):
     """Test route_to_next_plugin auto-checkpointing via CheckpointManager."""
