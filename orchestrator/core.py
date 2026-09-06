@@ -448,6 +448,12 @@ class PluginRouter:
         - agent-tdd + red_green_refactor_complete → code-reviewer
         - code-reviewer + review_complete → None (end workflow)
 
+        When workflow_state and checkpoint_manager are both provided, every
+        call (including invalid handoffs and end-of-workflow) is appended to
+        the workflow's handoff history log (see
+        CheckpointManager.record_handoff/get_handoff_history), in addition to
+        the pre-handoff checkpoint created only when routing to a next plugin.
+
         Args:
             current_plugin: Name of currently executing plugin.
             current_phase: Execution phase/result status (e.g., "design_approved",
@@ -477,6 +483,13 @@ class PluginRouter:
         """
         # Invalid handoff halts workflow
         if not handoff_valid:
+            if workflow_state is not None and checkpoint_manager is not None:
+                checkpoint_manager.record_handoff(workflow_state, {
+                    "current_plugin": current_plugin,
+                    "current_phase": current_phase,
+                    "handoff_valid": False,
+                    "next_plugin": None,
+                })
             return None
 
         next_plugin = self.USE_DEFAULT_ROUTE
@@ -488,8 +501,15 @@ class PluginRouter:
             route_key = (current_plugin, current_phase)
             next_plugin = self.ROUTING_TABLE.get(route_key)
 
-        if next_plugin is not None and workflow_state is not None and checkpoint_manager is not None:
-            checkpoint_manager.create_checkpoint(workflow_state, f"before_{next_plugin}_spawn")
+        if workflow_state is not None and checkpoint_manager is not None:
+            if next_plugin is not None:
+                checkpoint_manager.create_checkpoint(workflow_state, f"before_{next_plugin}_spawn")
+            checkpoint_manager.record_handoff(workflow_state, {
+                "current_plugin": current_plugin,
+                "current_phase": current_phase,
+                "handoff_valid": True,
+                "next_plugin": next_plugin,
+            })
 
         if self.telemetry:
             self.telemetry.emit(

@@ -583,6 +583,41 @@ class TestPluginRouterCheckpointing(unittest.TestCase):
 
         self.assertEqual(next_plugin, "agent-tdd")
 
+    def test_valid_handoff_recorded_in_handoff_history(self):
+        """Routing to a next plugin is recorded in the handoff history log."""
+        self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=True,
+            workflow_state=self.workflow_state, checkpoint_manager=self.checkpoint_manager
+        )
+
+        history = self.checkpoint_manager.get_handoff_history(self.workflow_state)
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["next_plugin"], "agent-tdd")
+        self.assertTrue(history[0]["handoff_valid"])
+
+    def test_invalid_handoff_recorded_in_handoff_history(self):
+        """An invalid handoff is recorded in history even though no checkpoint is made."""
+        self.router.route_to_next_plugin(
+            "agent-isdd", "design_approved", handoff_valid=False,
+            workflow_state=self.workflow_state, checkpoint_manager=self.checkpoint_manager
+        )
+
+        history = self.checkpoint_manager.get_handoff_history(self.workflow_state)
+        self.assertEqual(len(history), 1)
+        self.assertFalse(history[0]["handoff_valid"])
+        self.assertIsNone(history[0]["next_plugin"])
+
+    def test_end_of_workflow_recorded_in_handoff_history(self):
+        """Reaching the end of the workflow (no checkpoint) is still recorded."""
+        self.router.route_to_next_plugin(
+            "code-reviewer", "review_complete", handoff_valid=True,
+            workflow_state=self.workflow_state, checkpoint_manager=self.checkpoint_manager
+        )
+
+        history = self.checkpoint_manager.get_handoff_history(self.workflow_state)
+        self.assertEqual(len(history), 1)
+        self.assertIsNone(history[0]["next_plugin"])
+
 
 if __name__ == "__main__":
     unittest.main()

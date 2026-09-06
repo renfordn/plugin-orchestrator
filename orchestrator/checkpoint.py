@@ -127,6 +127,56 @@ class CheckpointManager:
             "action_required": "Address the error that triggered rollback, then continue"
         }
 
+    def record_handoff(self, workflow_state: dict, entry: dict) -> None:
+        """
+        Append an entry to the workflow's handoff history log.
+
+        Unlike checkpoints (full state snapshots taken before major handoffs),
+        this is a lightweight, append-only audit log of routing decisions
+        (including ones that don't produce a checkpoint, like an invalid
+        handoff or reaching the end of the workflow). Stored alongside
+        checkpoints in workflow_state["orchestration"]["handoff_history"].
+
+        Args:
+            workflow_state: Workflow state dict to append to (modified in-place)
+            entry: Arbitrary dict describing the decision (e.g. current_plugin,
+                current_phase, handoff_valid, next_plugin). A "timestamp" key
+                is added automatically.
+
+        Example:
+            >>> manager.record_handoff(workflow_state, {
+            ...     "current_plugin": "agent-isdd",
+            ...     "current_phase": "design_approved",
+            ...     "handoff_valid": True,
+            ...     "next_plugin": "agent-tdd",
+            ... })
+        """
+        if "orchestration" not in workflow_state:
+            workflow_state["orchestration"] = {}
+        workflow_state["orchestration"].setdefault("handoff_history", []).append({
+            **entry,
+            "timestamp": self._get_iso_timestamp(),
+        })
+
+    def get_handoff_history(self, workflow_state: dict) -> List[dict]:
+        """
+        Retrieve the workflow's handoff history log for audit.
+
+        Returns entries recorded via record_handoff(), most recent first.
+
+        Args:
+            workflow_state: Workflow state dict
+
+        Returns:
+            List of handoff history entries (most recent first). Empty list
+            if none have been recorded.
+        """
+        if "orchestration" not in workflow_state or \
+           "handoff_history" not in workflow_state["orchestration"]:
+            return []
+
+        return list(reversed(workflow_state["orchestration"]["handoff_history"]))
+
     def create_checkpoint(
         self,
         workflow_state: dict,
