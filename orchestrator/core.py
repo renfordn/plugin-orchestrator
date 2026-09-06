@@ -18,6 +18,7 @@ If any handoff fails validation, the workflow pauses (returns None).
 """
 
 import asyncio
+import hashlib
 import json
 import time
 import warnings
@@ -41,6 +42,9 @@ class PluginRouter:
         ROUTING_TABLE: Deterministic routing by (plugin, phase) tuple, loaded from
             routing_table.json (see routing_table_path on __init__) rather than
             hardcoded, so new workflow sequences don't require editing this module.
+            Hot-reloaded from disk on each route_to_next_plugin() call (see
+            refresh_routing_table()) so edits take effect without recreating
+            the router.
     """
 
     # Hard dependencies: required for workflow continuation
@@ -79,9 +83,9 @@ class PluginRouter:
             raise TypeError("capability_map cannot be None")
         self.capability_map = capability_map
         self.telemetry = telemetry
-        self.ROUTING_TABLE = self._load_routing_table(
-            routing_table_path or DEFAULT_ROUTING_TABLE_PATH
-        )
+        self._routing_table_path = routing_table_path or DEFAULT_ROUTING_TABLE_PATH
+        self.ROUTING_TABLE = self._load_routing_table(self._routing_table_path)
+        self._routing_table_hash = self._hash_routing_table_file(self._routing_table_path)
         self._routing_policy = None
         self._payload_mappings = {}
         self._payload_transformer = None
@@ -197,6 +201,36 @@ class PluginRouter:
                     )
 
         return table
+
+    @staticmethod
+    def _hash_routing_table_file(path) -> str:
+        """MD5 hash of the routing table file's contents, or "" if unreadable."""
+        try:
+            with open(path, "rb") as f:
+                return hashlib.md5(f.read()).hexdigest()
+        except OSError:
+            return ""
+
+    def refresh_routing_table(self) -> bool:
+        """Re-load ROUTING_TABLE from disk if the file changed, in place.
+
+        Lets an operator edit routing_table.json (add/change a route) while
+        the orchestrator session is running, and have PluginRouter pick it up
+        on the next routing decision without recreating the router - the same
+        hot-reload model CapabilityMap.refresh() applies to INTEROP.md files.
+        Cheap no-op when the file is unchanged (hash compare, no re-parse).
+
+        Returns:
+            True if the file changed and ROUTING_TABLE was reloaded, False
+            otherwise.
+        """
+        current_hash = self._hash_routing_table_file(self._routing_table_path)
+        if current_hash == self._routing_table_hash:
+            return False
+
+        self.ROUTING_TABLE = self._load_routing_table(self._routing_table_path)
+        self._routing_table_hash = current_hash
+        return True
 
     def check_plugin_availability(
         self,
@@ -533,6 +567,9 @@ class PluginRouter:
             next_plugin = self._routing_policy(current_plugin, current_phase, workflow_state)
 
         if next_plugin is self.USE_DEFAULT_ROUTE:
+            # Pick up any routing_table.json edits since the last call
+            # (hot-reload), so routing always uses the current table.
+            self.refresh_routing_table()
             # Look up routing table: (plugin, phase) -> next_plugin
             route_key = (current_plugin, current_phase)
             next_plugin = self.ROUTING_TABLE.get(route_key)
