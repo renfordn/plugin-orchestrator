@@ -4,9 +4,11 @@ Modules across this codebase (interop_parser's capability-map cache,
 checkpoint.py, the hooks) each read and write workflow-state.json directly.
 This module provides a small store abstraction with a get/save contract so
 that state can live behind a shared backend instead: an in-memory store for
-tests and single-process use, and a file-based JSON store (one file per
+tests and single-process use, a file-based JSON store (one file per
 workflow, atomic writes, advisory file locking) so multiple processes on the
-same machine can safely share workflow state.
+same machine can safely share workflow state, and a Redis-backed store so
+workflow state can be shared across machines, not just processes on one
+host - the "distributed workflow state tracking" enhancement.
 """
 
 import copy
@@ -97,3 +99,56 @@ class FileStateStore(WorkflowStateStore):
             finally:
                 if fcntl:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+class RedisStateStore(WorkflowStateStore):
+    """State store backed by Redis, so workflow state is shared across machines.
+
+    FileStateStore only helps processes on one host; a multi-host orchestrator
+    deployment (e.g. workers behind a load balancer) needs state visible from
+    any of them, which is what this store is for.
+
+    Requires the `redis` package (not a hard dependency of this project - only
+    import this class if you're using it). Each workflow is stored as a JSON
+    string under a namespaced key so unrelated data in the same Redis instance
+    isn't touched.
+    """
+
+    def __init__(self, redis_client=None, key_prefix: str = "orchestrator:workflow:", **redis_kwargs):
+        """
+        Args:
+            redis_client: An existing redis.Redis (or compatible) client to
+                reuse, e.g. for connection pooling or a fake client in tests.
+                If omitted, one is created from redis_kwargs.
+            key_prefix: Prefix applied to every workflow's Redis key.
+            **redis_kwargs: Passed to redis.Redis(...) when redis_client is
+                not given (e.g. host, port, db, password).
+
+        Raises:
+            ImportError: If the `redis` package is not installed and no
+                redis_client was supplied.
+        """
+        self.key_prefix = key_prefix
+        if redis_client is not None:
+            self._client = redis_client
+        else:
+            try:
+                import redis
+            except ImportError as e:
+                raise ImportError(
+                    "RedisStateStore requires the 'redis' package. "
+                    "Install it with: pip install redis"
+                ) from e
+            self._client = redis.Redis(**redis_kwargs)
+
+    def _key(self, workflow_id: str) -> str:
+        return f"{self.key_prefix}{workflow_id}"
+
+    def get(self, workflow_id: str) -> dict:
+        raw = self._client.get(self._key(workflow_id))
+        if raw is None:
+            return {}
+        return json.loads(raw)
+
+    def save(self, workflow_id: str, state: dict) -> None:
+        self._client.set(self._key(workflow_id), json.dumps(state))
