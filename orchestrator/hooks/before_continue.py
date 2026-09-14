@@ -16,10 +16,12 @@ INTEROP.md parsing on subsequent agent spawns.
 """
 
 import logging
+from pathlib import Path
 from typing import Optional, Tuple
 from orchestrator.nelly import NellyBriefManager
 from orchestrator.interop_parser import CapabilityMap
 from orchestrator.checkpoint import CheckpointManager
+from orchestrator.nelly_integration import ErrorPatternManager
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +68,58 @@ def handle_agent_spawn(
     rollback_context = _build_rollback_context(workflow_state)
     tier1_context = _build_tier1_context(capability_map, brief_text)
     tier2_context = _build_tier2_context(workflow_state)
-    parts = [p for p in (rollback_context, tier1_context, tier2_context, spawn_prompt) if p]
+    error_pattern_context = _build_error_pattern_context(workflow_state)
+    parts = [
+        p for p in (rollback_context, tier1_context, tier2_context, error_pattern_context, spawn_prompt)
+        if p
+    ]
     modified_prompt = "\n\n".join(parts)
 
     return modified_prompt
+
+
+def _build_error_pattern_context(workflow_state: dict) -> Optional[str]:
+    """Build a Tier 1-adjacent context block surfacing recurring, high-severity
+    orchestration error patterns, if a project-wide error registry is configured.
+
+    Graceful degradation: returns None (no block injected) when no registry
+    path is configured, the registry is missing/corrupted, or no high-severity
+    recurring patterns exist. Never raises -- error-pattern surfacing must
+    never block or delay an agent spawn.
+
+    Args:
+        workflow_state: Current workflow state dict. Reads the optional
+            "error_registry_path" key (project-wide error-registry.json path).
+
+    Returns:
+        Formatted context string, or None if nothing to surface.
+    """
+    registry_path_str = workflow_state.get("error_registry_path")
+    if not registry_path_str:
+        return None
+
+    try:
+        manager = ErrorPatternManager(Path(registry_path_str))
+        patterns = manager.get_high_severity_pattern_dicts()
+    except Exception as e:
+        logger.warning(f"Failed to build error pattern context: {e}. Continuing without it.")
+        return None
+
+    if not patterns:
+        return None
+
+    lines = ["=== ERROR PATTERNS (Known Recurring Issues) ==="]
+    for pattern in patterns:
+        # .get() with defaults: a pattern-dict shape drift should degrade one
+        # line's readability, not silently vanish the whole section via an
+        # uncaught KeyError bubbling into the broad except above.
+        severity = pattern.get("severity", "unknown")
+        error_type = pattern.get("error_type", "unknown")
+        frequency = pattern.get("occurrence_frequency", "unknown frequency")
+        plugins = ", ".join(pattern.get("affected_plugins", [])) or "unknown plugins"
+        fix = pattern.get("suggested_fix", "review error logs for context")
+        lines.append(f"- [{severity}] {error_type}: {frequency} across {plugins}. Suggested fix: {fix}")
+    return "\n".join(lines)
 
 
 def _build_rollback_context(workflow_state: dict) -> Optional[str]:

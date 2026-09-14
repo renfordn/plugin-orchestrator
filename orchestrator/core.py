@@ -22,11 +22,13 @@ import hashlib
 import json
 import time
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 from orchestrator.interop_parser import CapabilityMap
 from orchestrator.checkpoint import CheckpointManager
 from orchestrator.telemetry import TelemetryPublisher
+from orchestrator.error_logger import ErrorLogger
 
 DEFAULT_ROUTING_TABLE_PATH = Path(__file__).parent / "routing_table.json"
 
@@ -61,7 +63,8 @@ class PluginRouter:
         self,
         capability_map: CapabilityMap,
         routing_table_path: Optional[str] = None,
-        telemetry: Optional[TelemetryPublisher] = None
+        telemetry: Optional[TelemetryPublisher] = None,
+        error_logger: Optional[ErrorLogger] = None
     ):
         """Initialize PluginRouter with CapabilityMap for contract queries.
 
@@ -75,6 +78,12 @@ class PluginRouter:
                 checks, handoff validation, and routing decisions emit events
                 to it for external monitoring. Router works identically with
                 no telemetry configured.
+            error_logger: Optional ErrorLogger. When provided, availability
+                failures, handoff validation failures, and unmapped routing
+                decisions are captured as OrchestrationError and logged
+                (session-scoped only; callers persist to the registry
+                separately). Router works identically with no error_logger
+                configured (errors simply aren't captured).
 
         Raises:
             TypeError: If capability_map is None or not a CapabilityMap instance.
@@ -83,12 +92,47 @@ class PluginRouter:
             raise TypeError("capability_map cannot be None")
         self.capability_map = capability_map
         self.telemetry = telemetry
+        self.error_logger = error_logger
         self._routing_table_path = routing_table_path or DEFAULT_ROUTING_TABLE_PATH
         self.ROUTING_TABLE = self._load_routing_table(self._routing_table_path)
         self._routing_table_hash = self._hash_routing_table_file(self._routing_table_path)
         self._routing_policy = None
         self._payload_mappings = {}
         self._payload_transformer = None
+
+    def _log_orchestration_error(
+        self,
+        error_type: str,
+        source_plugin: str,
+        root_cause: str,
+        severity: str,
+        suggested_fix: str,
+        target_plugin: Optional[str] = None,
+        context: Optional[dict] = None
+    ) -> None:
+        """Capture an orchestration error via the configured ErrorLogger, if any.
+
+        No-op when no error_logger was configured. Never raises -- error
+        capture must never itself break routing behavior.
+        """
+        if self.error_logger is None:
+            return
+        try:
+            from orchestrator.error import OrchestrationError  # local import avoids a cycle at module load
+            error = OrchestrationError(
+                timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                error_type=error_type,
+                source_plugin=source_plugin,
+                target_plugin=target_plugin,
+                root_cause=root_cause,
+                severity=severity,
+                suggested_fix=suggested_fix,
+                context=context or {}
+            )
+            self.error_logger.log_error(error)
+        except Exception:
+            # Error capture is best-effort and must never block orchestration.
+            pass
 
     def set_payload_mapping(self, source_plugin: str, target_plugin: str, mapping: dict) -> None:
         """Register a field-rename mapping applied to (source_plugin -> target_plugin) payloads.
@@ -286,6 +330,17 @@ class PluginRouter:
                 "availability_check", plugin=normalized_name, available=available
             )
 
+        if not available:
+            severity = "high" if self.is_hard_dependency(normalized_name) else "low"
+            self._log_orchestration_error(
+                error_type="plugin_unavailable",
+                source_plugin=normalized_name,
+                root_cause="plugin_not_found",
+                severity=severity,
+                suggested_fix=f"ensure {normalized_name} is installed and enabled for this session",
+                context={"hard_dependency": self.is_hard_dependency(normalized_name)}
+            )
+
         return available
 
     def is_hard_dependency(self, plugin_name: str) -> bool:
@@ -407,6 +462,22 @@ class PluginRouter:
                     "source_capability": source_capability_id,
                     "target_capability": target_capability_id,
                     "payload_size": len(payload),
+                }
+            )
+
+        if not is_valid:
+            self._log_orchestration_error(
+                error_type="handoff_validation",
+                source_plugin=source_plugin,
+                target_plugin=target_plugin,
+                root_cause="missing_required_field" if error and "consumes" in error.lower()
+                    else "capability_not_found",
+                severity="high",
+                suggested_fix=error or "review handoff contract in INTEROP.md",
+                context={
+                    "source_capability": source_capability_id,
+                    "target_capability": target_capability_id,
+                    "error_detail": error,
                 }
             )
 
@@ -572,6 +643,17 @@ class PluginRouter:
             self.refresh_routing_table()
             # Look up routing table: (plugin, phase) -> next_plugin
             route_key = (current_plugin, current_phase)
+            if route_key not in self.ROUTING_TABLE:
+                # Distinct from an explicit `"next": null` entry (legitimate
+                # end-of-workflow) -- this key isn't in the table at all.
+                self._log_orchestration_error(
+                    error_type="routing_failed",
+                    source_plugin=current_plugin,
+                    root_cause="no_route_defined",
+                    severity="medium",
+                    suggested_fix=f"add a route for ({current_plugin}, {current_phase}) to routing_table.json",
+                    context={"phase": current_phase}
+                )
             next_plugin = self.ROUTING_TABLE.get(route_key)
 
         if workflow_state is not None and checkpoint_manager is not None:
