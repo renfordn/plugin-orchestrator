@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from orchestrator.error import OrchestrationError
 
 
@@ -102,7 +102,7 @@ class ErrorRegistry:
         if registry is None:
             return []
 
-        cutoff_date = (datetime.utcnow() - timedelta(days=days_back)).isoformat()
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).replace(tzinfo=None).isoformat()
         results = []
 
         for error_dict in registry.get("errors", []):

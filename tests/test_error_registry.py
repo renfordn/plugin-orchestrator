@@ -31,8 +31,8 @@ class TestErrorRegistryRed(unittest.TestCase):
 
     def test_query_errors_no_filters_returns_all(self):
         """Test querying with no filters returns all errors within window."""
-        from datetime import datetime
-        now = datetime.utcnow().isoformat() + "Z"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self._write_registry([
             {
                 "timestamp": now, "error_type": "handoff_validation",
@@ -46,8 +46,8 @@ class TestErrorRegistryRed(unittest.TestCase):
 
     def test_query_errors_filters_by_plugin(self):
         """Test filtering by plugin name matches source or target."""
-        from datetime import datetime
-        now = datetime.utcnow().isoformat() + "Z"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self._write_registry([
             {
                 "timestamp": now, "error_type": "handoff_validation",
@@ -68,8 +68,8 @@ class TestErrorRegistryRed(unittest.TestCase):
 
     def test_query_errors_filters_by_error_type(self):
         """Test filtering by error_type."""
-        from datetime import datetime
-        now = datetime.utcnow().isoformat() + "Z"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self._write_registry([
             {
                 "timestamp": now, "error_type": "handoff_validation",
@@ -104,8 +104,8 @@ class TestErrorRegistryRed(unittest.TestCase):
 
     def test_detect_patterns_identifies_recurring_errors(self):
         """Test detect_patterns flags 2+ same-type errors as a pattern."""
-        from datetime import datetime
-        now = datetime.utcnow().isoformat() + "Z"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self._write_registry([
             {
                 "timestamp": now, "error_type": "handoff_validation",
@@ -127,8 +127,8 @@ class TestErrorRegistryRed(unittest.TestCase):
 
     def test_detect_patterns_ignores_single_occurrence(self):
         """Test that a single error doesn't count as a pattern."""
-        from datetime import datetime
-        now = datetime.utcnow().isoformat() + "Z"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self._write_registry([
             {
                 "timestamp": now, "error_type": "handoff_validation",
@@ -142,8 +142,8 @@ class TestErrorRegistryRed(unittest.TestCase):
 
     def test_get_high_severity_patterns_filters_correctly(self):
         """Test get_high_severity_patterns only returns high-severity patterns."""
-        from datetime import datetime
-        now = datetime.utcnow().isoformat() + "Z"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self._write_registry([
             {
                 "timestamp": now, "error_type": "handoff_validation",
@@ -175,8 +175,8 @@ class TestErrorRegistryRed(unittest.TestCase):
     def test_performance_1000_errors_under_100ms(self):
         """Test query performance with 1000-error registry stays under 100ms."""
         import time
-        from datetime import datetime
-        now = datetime.utcnow().isoformat() + "Z"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         errors = [
             {
                 "timestamp": now, "error_type": "handoff_validation",
