@@ -44,7 +44,8 @@ class ErrorPatternManager:
 
     def get_high_severity_pattern_dicts(
         self,
-        registry_path: Optional[Path] = None
+        registry_path: Optional[Path] = None,
+        cache: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """Return high-severity recurring error patterns as plain dicts.
 
@@ -55,15 +56,34 @@ class ErrorPatternManager:
 
         Args:
             registry_path: Path to error-registry.json (optional, uses initialized path if not provided)
+            cache: Optional mutable dict (e.g. persisted in workflow_state) used to avoid
+                re-reading/re-parsing the registry file on every call within a session.
+                Keyed by the registry file's mtime -- reused as-is while the file is
+                unchanged, recomputed and overwritten as soon as the mtime moves.
 
         Returns:
             List of pattern dicts (pattern_id, error_type, occurrence_frequency,
             first_seen, last_seen, affected_plugins, suggested_fix, severity).
             Empty list on missing registry or when no high-severity patterns exist.
         """
+        path = registry_path or self.registry.registry_path
+        current_mtime = None
+        if cache is not None and path is not None:
+            try:
+                current_mtime = path.stat().st_mtime
+            except OSError:
+                current_mtime = None
+
+            if (
+                current_mtime is not None
+                and cache.get("registry_path") == str(path)
+                and cache.get("mtime") == current_mtime
+            ):
+                return cache["patterns"]
+
         try:
             patterns = self.registry.get_high_severity_patterns(registry_path)
-            return [
+            pattern_dicts = [
                 {
                     "pattern_id": pattern.pattern_id,
                     "error_type": pattern.error_type,
@@ -80,6 +100,13 @@ class ErrorPatternManager:
             # Graceful degradation: if error registry unavailable, return no patterns
             logger.warning(f"Failed to retrieve error patterns: {e}")
             return []
+
+        if cache is not None and path is not None and current_mtime is not None:
+            cache["registry_path"] = str(path)
+            cache["mtime"] = current_mtime
+            cache["patterns"] = pattern_dicts
+
+        return pattern_dicts
 
     def query_error_history(
         self,

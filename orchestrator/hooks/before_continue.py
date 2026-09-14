@@ -98,9 +98,14 @@ def _build_error_pattern_context(workflow_state: dict) -> Optional[str]:
     if not registry_path_str:
         return None
 
+    # mtime-keyed cache in workflow_state survives across per-spawn hook invocations
+    # (each spawn re-loads workflow-state.json in a fresh process) so the registry file
+    # isn't re-read and re-parsed on every single agent spawn within a session.
+    cache = workflow_state["orchestration"].setdefault("error_pattern_cache", {})
+
     try:
         manager = ErrorPatternManager(Path(registry_path_str))
-        patterns = manager.get_high_severity_pattern_dicts()
+        patterns = manager.get_high_severity_pattern_dicts(cache=cache)
     except Exception as e:
         logger.warning(f"Failed to build error pattern context: {e}. Continuing without it.")
         return None

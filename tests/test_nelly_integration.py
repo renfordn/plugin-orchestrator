@@ -1,10 +1,13 @@
 """Tests for ErrorPatternManager nelly integration."""
 
 import json
+import os
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 from datetime import datetime, timedelta
+from orchestrator.error_registry import ErrorRegistry
 from orchestrator.nelly_integration import ErrorPatternManager
 
 
@@ -198,6 +201,89 @@ class TestErrorPatternManagerRed(unittest.TestCase):
         manager = ErrorPatternManager(Path("/nonexistent/error-registry.json"))
         patterns = manager.get_high_severity_pattern_dicts()
         self.assertEqual(patterns, [])
+
+    def test_get_high_severity_patterns_cache_reused_when_mtime_unchanged(self):
+        """Test a second call within the same mtime reuses the cached pattern list
+        without re-reading/re-parsing the registry file."""
+        now = datetime.utcnow().isoformat() + "Z"
+        self._write_registry([
+            {
+                "timestamp": now, "error_type": "handoff_validation",
+                "source_plugin": "agent-isdd", "target_plugin": "agent-tdd",
+                "root_cause": "missing_field", "severity": "high",
+                "suggested_fix": "add field", "context": {}
+            },
+            {
+                "timestamp": now, "error_type": "handoff_validation",
+                "source_plugin": "agent-isdd", "target_plugin": "agent-tdd",
+                "root_cause": "missing_field", "severity": "high",
+                "suggested_fix": "add field", "context": {}
+            }
+        ])
+
+        cache: dict = {}
+        with patch.object(
+            ErrorRegistry, "get_high_severity_patterns",
+            wraps=self.manager.registry.get_high_severity_patterns
+        ) as mock_get:
+            first = self.manager.get_high_severity_pattern_dicts(cache=cache)
+            second = self.manager.get_high_severity_pattern_dicts(cache=cache)
+
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(first, second)
+        self.assertEqual(cache["patterns"], first)
+
+    def test_get_high_severity_patterns_cache_invalidated_on_mtime_change(self):
+        """Test a changed registry mtime triggers a fresh read instead of reusing the cache."""
+        now = datetime.utcnow().isoformat() + "Z"
+        self._write_registry([
+            {
+                "timestamp": now, "error_type": "handoff_validation",
+                "source_plugin": "agent-isdd", "target_plugin": "agent-tdd",
+                "root_cause": "missing_field", "severity": "high",
+                "suggested_fix": "add field", "context": {}
+            },
+            {
+                "timestamp": now, "error_type": "handoff_validation",
+                "source_plugin": "agent-isdd", "target_plugin": "agent-tdd",
+                "root_cause": "missing_field", "severity": "high",
+                "suggested_fix": "add field", "context": {}
+            }
+        ])
+
+        cache: dict = {}
+        with patch.object(
+            ErrorRegistry, "get_high_severity_patterns",
+            wraps=self.manager.registry.get_high_severity_patterns
+        ) as mock_get:
+            first = self.manager.get_high_severity_pattern_dicts(cache=cache)
+            first_mtime = cache["mtime"]
+
+            # Rewrite the registry with a new pattern and force the mtime forward
+            # (some filesystems have coarse mtime resolution, so bump explicitly).
+            self._write_registry([
+                {
+                    "timestamp": now, "error_type": "routing_failed",
+                    "source_plugin": "agent-isdd", "target_plugin": None,
+                    "root_cause": "routing_gone", "severity": "high",
+                    "suggested_fix": "fix routing", "context": {}
+                },
+                {
+                    "timestamp": now, "error_type": "routing_failed",
+                    "source_plugin": "agent-isdd", "target_plugin": None,
+                    "root_cause": "routing_gone", "severity": "high",
+                    "suggested_fix": "fix routing", "context": {}
+                }
+            ])
+            new_mtime = first_mtime + 5
+            os.utime(self.registry_path, (new_mtime, new_mtime))
+
+            second = self.manager.get_high_severity_pattern_dicts(cache=cache)
+
+        self.assertEqual(mock_get.call_count, 2)
+        self.assertNotEqual(first, second)
+        self.assertEqual(second[0]["error_type"], "routing_failed")
+        self.assertEqual(cache["mtime"], new_mtime)
 
     def test_query_error_history_empty_for_plugin_with_no_errors(self):
         """Test querying a plugin with no errors returns empty, not error."""
