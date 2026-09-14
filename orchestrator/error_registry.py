@@ -53,6 +53,28 @@ class ErrorRegistry:
             registry_path: Path to error-registry.json. If None, must be provided to query_errors.
         """
         self.registry_path = registry_path
+        self._registry_cache: Dict[str, Any] = {}  # path str -> (mtime, parsed dict)
+
+    def _load_registry(self, path: Path) -> Optional[Dict[str, Any]]:
+        """Load the registry JSON, reusing the cached parse when the file's mtime is unchanged."""
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return None
+
+        key = str(path)
+        cached = self._registry_cache.get(key)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            return None
+
+        self._registry_cache[key] = (mtime, data)
+        return data
 
     def query_errors(
         self,
@@ -76,10 +98,8 @@ class ErrorRegistry:
         if not path or not path.exists():
             return []
 
-        try:
-            with open(path) as f:
-                registry = json.load(f)
-        except Exception:
+        registry = self._load_registry(path)
+        if registry is None:
             return []
 
         cutoff_date = (datetime.utcnow() - timedelta(days=days_back)).isoformat()

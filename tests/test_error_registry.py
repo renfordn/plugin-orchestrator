@@ -1,7 +1,9 @@
 """Tests for ErrorRegistry pattern detection and querying."""
 
 import json
+import time
 import unittest
+from unittest import mock
 import tempfile
 from pathlib import Path
 from orchestrator.error import OrchestrationError
@@ -192,3 +194,78 @@ class TestErrorRegistryRed(unittest.TestCase):
 
         self.assertEqual(len(results), 1000)
         self.assertLess(elapsed_ms, 100, f"Query took {elapsed_ms}ms, expected <100ms")
+
+
+class TestErrorRegistryMtimeCache(unittest.TestCase):
+    """task_0403d361: avoid re-reading/re-parsing error-registry.json when it hasn't changed."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.registry_path = Path(self.temp_dir) / "error-registry.json"
+        self.registry = ErrorRegistry(self.registry_path)
+
+    def _write_registry(self, errors):
+        with open(self.registry_path, "w") as f:
+            json.dump({"errors": errors, "patterns": []}, f)
+
+    def test_unchanged_file_is_not_reparsed(self):
+        """Two reads with no file change should only hit json.load once."""
+        self._write_registry([])
+        with mock.patch("orchestrator.error_registry.json.load", wraps=json.load) as spy:
+            self.registry.query_errors()
+            self.registry.query_errors()
+            self.assertEqual(spy.call_count, 1)
+
+    def test_modified_file_is_reparsed(self):
+        """A file change (new mtime) must invalidate the cache and be re-read."""
+        self._write_registry([])
+        self.registry.query_errors()
+
+        # Force a distinct mtime — some filesystems have coarse mtime resolution.
+        self._write_registry([
+            {
+                "timestamp": "2026-01-01T00:00:00Z", "error_type": "handoff_validation",
+                "source_plugin": "agent-isdd", "target_plugin": None,
+                "root_cause": "test", "severity": "high",
+                "suggested_fix": "fix", "context": {}
+            }
+        ])
+        newer = time.time() + 5
+        import os
+        os.utime(self.registry_path, (newer, newer))
+
+        results = self.registry.query_errors(days_back=3650)
+        self.assertEqual(len(results), 1)
+
+    def test_cache_is_scoped_per_registry_path(self):
+        """Querying a second, different path must not return the first path's cached data."""
+        self._write_registry([
+            {
+                "timestamp": "2026-01-01T00:00:00Z", "error_type": "handoff_validation",
+                "source_plugin": "agent-isdd", "target_plugin": None,
+                "root_cause": "test", "severity": "high",
+                "suggested_fix": "fix", "context": {}
+            }
+        ])
+        self.registry.query_errors(days_back=3650)
+
+        other_path = Path(self.temp_dir) / "other-registry.json"
+        with open(other_path, "w") as f:
+            json.dump({"errors": [], "patterns": []}, f)
+
+        results = self.registry.query_errors(registry_path=other_path, days_back=3650)
+        self.assertEqual(results, [])
+
+    def test_corrupted_file_still_falls_back_gracefully_with_cache(self):
+        """Cache must not mask the existing graceful-degradation behavior."""
+        self._write_registry([])
+        self.registry.query_errors()
+
+        with open(self.registry_path, "w") as f:
+            f.write("{ invalid json ]")
+        newer = time.time() + 5
+        import os
+        os.utime(self.registry_path, (newer, newer))
+
+        results = self.registry.query_errors()
+        self.assertEqual(results, [])
